@@ -1,4 +1,5 @@
 import importlib
+import sys
 
 
 def test_src_package_has_version():

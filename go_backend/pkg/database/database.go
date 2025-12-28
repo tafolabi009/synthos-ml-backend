@@ -72,3 +72,16 @@ func Health() error {
 
 	return nil
 }
+
+// IsHealthy returns true if database is healthy
+func IsHealthy() bool {
+	return Health() == nil
+}
+
+// Stats returns database pool statistics
+func Stats() *pgxpool.Stat {
+	if db == nil {
+		return nil
+	}
+	return db.Stat()
+}

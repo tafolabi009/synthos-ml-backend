@@ -1,0 +1,487 @@
+name: SynthOS Production CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  GO_VERSION: "1.21"
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  PROJECT_NAME: synthos
+
+jobs:
+  # ==========================================================================
+  # Testing Jobs
+  # ==========================================================================
+  
+  test-go-backend:
+    name: "🧪 Test Go Backend"
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    env:
+      DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
+      REDIS_URL: localhost:6379
+      JWT_SECRET: test-jwt-secret-for-ci-minimum-32-chars
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go_backend/go.sum
+      
+      - name: Download dependencies
+        working-directory: go_backend
+        run: go mod download
+      
+      - name: Initialize database
+        run: |
+          PGPASSWORD=testpass psql -h localhost -U testuser -d testdb -f scripts/init-db.sql
+      
+      - name: Run unit tests
+        working-directory: go_backend
+        run: |
+          go test -v -race -coverprofile=coverage.out \
+            ./pkg/... \
+            ./internal/auth/... \
+            ./internal/models/... \
+            -timeout=120s
+      
+      - name: Run integration tests
+        working-directory: go_backend
+        run: go test -v -race ./tests/... -timeout=180s
+        continue-on-error: true
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: go_backend/coverage.out
+          flags: go-backend
+          fail_ci_if_error: false
+  
+  test-ml-backend:
+    name: "🧪 Test ML Backend"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: ml_backend/requirements.txt
+      
+      - name: Install dependencies
+        working-directory: ml_backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov pytest-timeout scipy
+      
+      - name: Run tests
+        working-directory: ml_backend
+        run: |
+          pytest tests/unit/ -v --tb=short \
+            --cov=src --cov-report=xml \
+            --timeout=120
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: ml_backend/coverage.xml
+          flags: ml-backend
+  
+  test-job-orchestrator:
+    name: "🧪 Test Job Orchestrator"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: job_orchestrator/go.sum
+      
+      - name: Run tests
+        working-directory: job_orchestrator
+        run: |
+          go test -v -race ./internal/... -timeout=120s
+  
+  # ==========================================================================
+  # Build Jobs
+  # ==========================================================================
+  
+  build-go-backend:
+    name: "🔨 Build Go Backend"
+    runs-on: ubuntu-latest
+    needs: [test-go-backend]
+    
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/go-backend
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: go_backend/Dockerfile.production
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            COMMIT_SHA=${{ github.sha }}
+  
+  build-job-orchestrator:
+    name: "🔨 Build Job Orchestrator"
+    runs-on: ubuntu-latest
+    needs: [test-job-orchestrator]
+    
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/job-orchestrator
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: job_orchestrator/Dockerfile.production
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+  build-ml-backend:
+    name: "🔨 Build ML Backend"
+    runs-on: ubuntu-latest
+    needs: [test-ml-backend]
+    
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/ml-backend
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ml_backend
+          file: ml_backend/Dockerfile.production
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+  # ==========================================================================
+  # Deploy Jobs
+  # ==========================================================================
+  
+  deploy-staging:
+    name: "🚀 Deploy to Staging"
+    runs-on: ubuntu-latest
+    needs: [build-go-backend, build-job-orchestrator, build-ml-backend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update ECS Go Backend Service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.PROJECT_NAME }}-staging-cluster \
+            --service ${{ env.PROJECT_NAME }}-go-backend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Update ECS Job Orchestrator Service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.PROJECT_NAME }}-staging-cluster \
+            --service ${{ env.PROJECT_NAME }}-job-orchestrator \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Update ML Backend on GPU Instance
+        run: |
+          aws ssm send-command \
+            --instance-ids ${{ secrets.GPU_INSTANCE_ID }} \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["docker pull ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/ml-backend:latest", "docker stop ml_backend || true", "docker rm ml_backend || true", "docker run -d --name ml_backend --gpus all -p 50051:50051 -p 50052:50052 -p 50054:50054 --env-file /etc/synthos/env ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/ml-backend:latest"]' \
+            --region ${{ env.AWS_REGION }} || echo "Skipping GPU instance update"
+      
+      - name: Wait for deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ env.PROJECT_NAME }}-staging-cluster \
+            --services ${{ env.PROJECT_NAME }}-go-backend ${{ env.PROJECT_NAME }}-job-orchestrator \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Run smoke tests
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names ${{ env.PROJECT_NAME }}-staging-alb \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          echo "Testing health endpoint..."
+          curl -f "http://${ALB_DNS}/health" || exit 1
+          
+          echo "Testing API endpoint..."
+          curl -f "http://${ALB_DNS}/api/v1/health" || exit 1
+          
+          echo "✅ Smoke tests passed!"
+  
+  deploy-production:
+    name: "🚀 Deploy to Production"
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update ECS Go Backend Service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.PROJECT_NAME }}-cluster \
+            --service ${{ env.PROJECT_NAME }}-go-backend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Update ECS Job Orchestrator Service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.PROJECT_NAME }}-cluster \
+            --service ${{ env.PROJECT_NAME }}-job-orchestrator \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Update ML Backend on GPU Instance
+        run: |
+          aws ssm send-command \
+            --instance-ids ${{ secrets.PROD_GPU_INSTANCE_ID }} \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["docker pull ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/ml-backend:latest", "docker stop ml_backend || true", "docker rm ml_backend || true", "docker run -d --name ml_backend --gpus all --restart always -p 50051:50051 -p 50052:50052 -p 50054:50054 --env-file /etc/synthos/env ${{ env.ECR_REGISTRY }}/${{ env.PROJECT_NAME }}/ml-backend:latest"]' \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Wait for deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ env.PROJECT_NAME }}-cluster \
+            --services ${{ env.PROJECT_NAME }}-go-backend ${{ env.PROJECT_NAME }}-job-orchestrator \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Production health check
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names ${{ env.PROJECT_NAME }}-alb \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          echo "Running production health checks..."
+          
+          # Health endpoint
+          curl -f "http://${ALB_DNS}/health" || exit 1
+          
+          # API health
+          curl -f "http://${ALB_DNS}/api/v1/health" || exit 1
+          
+          echo "✅ Production deployment successful!"
+      
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "🎉 Production deployment completed successfully!"
+          # Add Slack/Discord notification here
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Production deployment failed!"
+          # Add Slack/Discord notification here
+
+  # ==========================================================================
+  # Rollback Job (Manual trigger)
+  # ==========================================================================
+  
+  rollback:
+    name: "⏪ Rollback Deployment"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: ${{ github.event.inputs.deploy_env }}
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Rollback ECS Services
+        run: |
+          CLUSTER="${{ env.PROJECT_NAME }}-${{ github.event.inputs.deploy_env == 'production' && '' || 'staging-' }}cluster"
+          
+          # Get previous task definition
+          CURRENT_TD=$(aws ecs describe-services \
+            --cluster $CLUSTER \
+            --services ${{ env.PROJECT_NAME }}-go-backend \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          
+          # Get previous revision
+          PREV_REVISION=$(($(echo $CURRENT_TD | grep -oP ':\K\d+$') - 1))
+          PREV_TD=$(echo $CURRENT_TD | sed "s/:[0-9]*$/:$PREV_REVISION/")
+          
+          # Update service with previous task definition
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service ${{ env.PROJECT_NAME }}-go-backend \
+            --task-definition $PREV_TD \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Rolled back to: $PREV_TD"

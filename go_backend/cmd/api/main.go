@@ -1,3 +1,6 @@
+//go:build !production
+// +build !production
+
 package main
 
 import (
@@ -98,6 +101,29 @@ func main() {
 		app.Use(tracing.TracingMiddleware())
 		log.Println("Jaeger distributed tracing enabled")
 	}
+
+	// Root endpoint - API info
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"name":        "SynthOS API",
+			"description": "Enterprise ML Dataset Validation & Warranty Platform",
+			"version":     "1.0.0",
+			"status":      "operational",
+			"endpoints": fiber.Map{
+				"health":      "/health",
+				"docs":        "/api/v1/docs",
+				"auth":        "/api/v1/auth",
+				"datasets":    "/api/v1/datasets",
+				"validations": "/api/v1/validations",
+				"warranties":  "/api/v1/warranties",
+				"analytics":   "/api/v1/analytics",
+			},
+			"contact": fiber.Map{
+				"website": "https://synthos.dev",
+				"support": "support@synthos.dev",
+			},
+		})
+	})
 
 	// Health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {
