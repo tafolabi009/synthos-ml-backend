@@ -193,3 +193,42 @@ func RefreshTokenFiber(c *fiber.Ctx) error {
 
 	return c.JSON(response)
 }
+
+// GetMeFiber returns the current authenticated user's profile
+func GetMeFiber(c *fiber.Ctx) error {
+	// Get user ID from context (set by auth middleware)
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "UNAUTHORIZED",
+				"message": "Authentication required",
+			},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userRepo := repository.NewUserRepository(database.GetDB())
+	user, err := userRepo.GetByID(ctx, userID.(string))
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "NOT_FOUND",
+				"message": "User not found",
+			},
+		})
+	}
+
+	// Return user profile without sensitive fields
+	return c.JSON(fiber.Map{
+		"user_id":           user.ID,
+		"email":             user.Email,
+		"full_name":         user.FullName,
+		"company_id":        user.CompanyID,
+		"company_name":      user.CompanyName,
+		"subscription_tier": user.SubscriptionTier,
+		"created_at":        user.CreatedAt,
+	})
+}

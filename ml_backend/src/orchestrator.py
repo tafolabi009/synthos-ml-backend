@@ -281,6 +281,13 @@ class SynthosOrchestrator:
     This class provides a single entry point for the entire validation pipeline.
     Simply call validate() with your dataset path and it handles everything else.
     
+    GPU Configuration is auto-detected from hardware. Set environment variables
+    in AWS Secrets Manager to override:
+    - GPU_TIER: Force specific tier (ultra, high, medium, standard, basic)
+    - MAX_GPU_MEMORY_FRACTION: Memory usage (0.0-1.0)
+    - ENABLE_MIXED_PRECISION: true/false
+    - FORCE_SEQUENTIAL_TRAINING: true/false
+    
     Example:
         orchestrator = SynthosOrchestrator()
         result = await orchestrator.validate("data.parquet", "parquet")
@@ -298,7 +305,8 @@ class SynthosOrchestrator:
         collapse_threshold: float = 65.0,
         diversity_threshold: float = 50.0,
         use_cache: bool = True,
-        skip_cascade_training: bool = False  # Skip expensive cascade training for testing
+        skip_cascade_training: bool = False,  # Skip expensive cascade training for testing
+        auto_configure_gpu: bool = True  # NEW - Auto-detect GPU configuration
     ):
         """
         Initialize orchestrator and all sub-modules.
@@ -310,6 +318,7 @@ class SynthosOrchestrator:
             diversity_threshold: Minimum diversity score required
             use_cache: Cache intermediate results for faster re-runs
             skip_cascade_training: Skip cascade training (useful for CPU testing)
+            auto_configure_gpu: Auto-detect GPU hardware and optimize settings
         """
         logger.info("🚀 Initializing Synthos Validation Engine...")
         
@@ -318,7 +327,25 @@ class SynthosOrchestrator:
         self.use_cache = use_cache
         self.skip_cascade_training = skip_cascade_training
         
-        # Initialize GPU optimizer first
+        # Auto-detect GPU configuration
+        self.auto_gpu_config = None
+        if auto_configure_gpu:
+            try:
+                from src.utils.gpu_auto_config import GPUAutoConfig
+                gpu_config = GPUAutoConfig()
+                self.auto_gpu_config = gpu_config.get_optimal_config()
+                logger.info(f"🖥️  Auto-detected: {self.auto_gpu_config.num_gpus}x {self.auto_gpu_config.gpu_model}")
+                logger.info(f"📊 Performance tier: {self.auto_gpu_config.tier.value.upper()}")
+                logger.info(f"⏱️  Estimated validation time: {self.auto_gpu_config.estimated_validation_hours} hours")
+                logger.info(f"🎯 Quality factor: {self.auto_gpu_config.quality_factor * 100:.0f}%")
+                
+                # Use auto-detected settings
+                gpu_memory_fraction = self.auto_gpu_config.memory_config['max_memory_fraction']
+                enable_mixed_precision = self.auto_gpu_config.training_config['precision'] != 'fp32'
+            except Exception as e:
+                logger.warning(f"GPU auto-config failed, using defaults: {e}")
+        
+        # Initialize GPU optimizer
         self.gpu_optimizer = GPUOptimizer(
             memory_fraction=gpu_memory_fraction,
             enable_mixed_precision=enable_mixed_precision

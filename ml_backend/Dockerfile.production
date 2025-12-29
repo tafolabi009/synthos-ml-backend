@@ -73,17 +73,23 @@ EXPOSE 50051 50052 50054
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import grpc; channel = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(channel).result(timeout=5)" || exit 1
 
-# Environment variables
+# Environment variables (defaults - override via AWS Secrets Manager)
 ENV VALIDATION_SERVICE_PORT=50051 \
     COLLAPSE_SERVICE_PORT=50052 \
     DATA_SERVICE_PORT=50054 \
     SERVICE_HOST=0.0.0.0 \
     GRPC_MAX_WORKERS=10 \
     GRPC_MAX_MESSAGE_SIZE=100000000 \
-    GPU_MEMORY_FRACTION=0.8 \
+    # GPU Auto-Configuration (set via Secrets Manager)
+    GPU_TIER=auto \
+    MAX_GPU_MEMORY_FRACTION=0.9 \
     ENABLE_MIXED_PRECISION=true \
+    FORCE_SEQUENTIAL_TRAINING=false \
+    # Validation thresholds
     COLLAPSE_THRESHOLD=65.0 \
-    DIVERSITY_THRESHOLD=50.0
+    DIVERSITY_THRESHOLD=50.0 \
+    # Legacy (for backward compatibility)
+    GPU_MEMORY_FRACTION=0.8
 
 # Labels
 LABEL maintainer="SynthOS Team <team@synthos.ai>" \

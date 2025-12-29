@@ -181,6 +181,12 @@ func main() {
 			authRoutes.Post("/refresh", handlers.RefreshTokenFiber)
 		}
 
+		// Protected auth routes
+		authProtected := v1.Group("/auth", middleware.AuthRequiredFiber())
+		{
+			authProtected.Get("/me", handlers.GetMeFiber)
+		}
+
 		// Protected routes (require authentication)
 		protected := v1.Group("", middleware.AuthRequiredFiber())
 		{

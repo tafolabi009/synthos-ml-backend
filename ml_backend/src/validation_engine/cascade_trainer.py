@@ -75,7 +75,13 @@ class CascadeTrainer:
     Multi-scale cascade trainer using Resonance Neural Networks.
     
     Uses frequency-domain processing with O(n log n) complexity and holographic memory.
-    Trains models in parallel across 4x H200 GPUs.
+    Automatically adapts to available GPU hardware via GPUAutoConfig.
+    
+    Supported GPU configurations:
+    - p5.48xlarge: 8x H100 80GB (optimal)
+    - p4d.24xlarge: 8x A100 40GB (production)
+    - p3.8xlarge: 4x V100 16GB (budget)
+    - g5.12xlarge: 4x A10G 24GB (cost-effective)
     """
     
     def __init__(
@@ -83,22 +89,43 @@ class CascadeTrainer:
         dataset_id: str,
         validation_id: str,
         config: Dict,
-        hardware_config: Dict,
+        hardware_config: Optional[Dict] = None,
         progress_callback: Optional[callable] = None
     ):
         self.dataset_id = dataset_id
         self.validation_id = validation_id
         self.config = config
-        self.hardware_config = hardware_config
         self.progress_callback = progress_callback
         
+        # Auto-detect GPU configuration if not provided
+        if hardware_config is None or 'auto_detect' in hardware_config:
+            from src.utils.gpu_auto_config import GPUAutoConfig
+            auto_config = GPUAutoConfig()
+            self.auto_hardware = auto_config.get_optimal_config()
+            self.hardware_config = self._convert_auto_config(self.auto_hardware)
+            logger.info(f"Auto-detected GPU configuration: {self.auto_hardware.gpu_model}")
+        else:
+            self.hardware_config = hardware_config
+            self.auto_hardware = None
+        
         # GPU setup
-        self.num_gpus = hardware_config['gpu_config']['num_gpus']
+        self.num_gpus = self.hardware_config.get('gpu_config', {}).get('num_gpus', 
+                        self.auto_hardware.num_gpus if self.auto_hardware else 1)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Cascade configuration
-        self.cascade_config = config['cascade_training']
-        self.num_variants = config['cascade_training']['num_variants_per_tier']
+        # Cascade configuration - use auto-config if available
+        if self.auto_hardware:
+            self.cascade_config = self.auto_hardware.cascade_config
+            self.num_variants = {
+                'tier_1': self.cascade_config['tier_1']['num_models'],
+                'tier_2': self.cascade_config['tier_2']['num_models'],
+                'tier_3': self.cascade_config['tier_3']['num_models'],
+            }
+        else:
+            self.cascade_config = config.get('cascade_training', {})
+            self.num_variants = config.get('cascade_training', {}).get('num_variants_per_tier', 
+                                {'tier_1': 10, 'tier_2': 5, 'tier_3': 3})
+        
         self.total_models = sum(self.num_variants.values())
         
         # Results storage
@@ -109,9 +136,38 @@ class CascadeTrainer:
         self.start_time = None
         self.last_progress_update = time.time()
         
+        # Log configuration
+        gpu_name = self.auto_hardware.gpu_model if self.auto_hardware else "Manual Config"
         logger.info(f"Initialized CascadeTrainer for {dataset_id}")
         logger.info(f"Total models to train: {self.total_models}")
-        logger.info(f"Using {self.num_gpus}x H200 GPUs")
+        logger.info(f"GPU Configuration: {self.num_gpus}x {gpu_name}")
+        if self.auto_hardware:
+            logger.info(f"Estimated validation time: {self.auto_hardware.estimated_validation_hours} hours")
+            logger.info(f"Quality factor: {self.auto_hardware.quality_factor * 100:.0f}%")
+    
+    def _convert_auto_config(self, auto_config) -> Dict:
+        """Convert GPUAutoConfig output to legacy hardware_config format"""
+        return {
+            'gpu_config': {
+                'num_gpus': auto_config.num_gpus,
+                'tier_allocation': {
+                    'tier_1_micro': {
+                        'gpus': auto_config.cascade_config['tier_1']['gpus'],
+                        'batch_size': auto_config.cascade_config['tier_1']['batch_size'],
+                    },
+                    'tier_2_mini': {
+                        'gpus': auto_config.cascade_config['tier_2']['gpus'],
+                        'batch_size': auto_config.cascade_config['tier_2']['batch_size'],
+                    },
+                    'tier_3_medium': {
+                        'gpus': auto_config.cascade_config['tier_3']['gpus'],
+                        'batch_size': auto_config.cascade_config['tier_3']['batch_size'],
+                    },
+                },
+            },
+            'training_config': auto_config.training_config,
+            'memory_config': auto_config.memory_config,
+        }
     
     async def train_cascade(
         self,

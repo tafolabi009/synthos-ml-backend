@@ -133,16 +133,17 @@ func runMigrations(pool *pgxpool.Pool) error {
 			id VARCHAR(255) PRIMARY KEY,
 			validation_id VARCHAR(255) REFERENCES validations(id),
 			user_id VARCHAR(255) NOT NULL REFERENCES users(id),
-			coverage_type VARCHAR(50) NOT NULL,
-			coverage_period_days INT NOT NULL,
-			max_claim_amount DECIMAL(10,2),
-			premium DECIMAL(10,2),
 			status VARCHAR(50) NOT NULL DEFAULT 'pending',
-			terms_version VARCHAR(20),
+			warranty_type VARCHAR(50),
+			coverage_amount DECIMAL(12,2),
+			start_date TIMESTAMP,
+			end_date TIMESTAMP,
+			terms TEXT,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP,
-			activated_at TIMESTAMP
+			approved_at TIMESTAMP,
+			rejected_at TIMESTAMP,
+			rejection_reason TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_warranties_user_id ON warranties(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_warranties_validation_id ON warranties(validation_id)`,
@@ -152,15 +153,39 @@ func runMigrations(pool *pgxpool.Pool) error {
 			id VARCHAR(255) PRIMARY KEY,
 			warranty_id VARCHAR(255) NOT NULL REFERENCES warranties(id),
 			user_id VARCHAR(255) NOT NULL REFERENCES users(id),
-			reason TEXT NOT NULL,
-			evidence_urls TEXT[],
-			claim_amount DECIMAL(10,2),
+			claim_type VARCHAR(50),
+			claim_amount DECIMAL(12,2),
+			description TEXT,
 			status VARCHAR(50) NOT NULL DEFAULT 'submitted',
 			resolution TEXT,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			reviewed_at TIMESTAMP,
 			resolved_at TIMESTAMP
 		)`,
+
+		// Add missing columns (for schema compatibility)
+		`ALTER TABLE datasets ADD COLUMN IF NOT EXISTS s3_path VARCHAR(1000)`,
+		`ALTER TABLE datasets ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS risk_score INT`,
+		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS risk_level VARCHAR(50)`,
+		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS recommendation TEXT`,
+		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS warranty_eligible BOOLEAN`,
+		
+		// Fix warranties table to match repository code
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS warranty_type VARCHAR(50)`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS coverage_amount DECIMAL(12,2)`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS start_date TIMESTAMP`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS end_date TIMESTAMP`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS terms TEXT`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP`,
+		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
+		
+		// Fix warranty_claims table to match repository code
+		`ALTER TABLE warranty_claims ADD COLUMN IF NOT EXISTS claim_type VARCHAR(50)`,
+		`ALTER TABLE warranty_claims ADD COLUMN IF NOT EXISTS description TEXT`,
+		`ALTER TABLE warranty_claims ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP`,
 	}
 
 	for _, migration := range migrations {
