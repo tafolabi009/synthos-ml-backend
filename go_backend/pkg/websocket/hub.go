@@ -352,9 +352,6 @@ func (c *Client) WritePump() {
 	}
 }
 
-// TypeError constant for error type
-var TypeError MessageType = "error"
-
 // GetClientCount returns the number of connected clients
 func (h *Hub) GetClientCount() int {
 	h.mu.RLock()

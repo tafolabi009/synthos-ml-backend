@@ -178,13 +178,37 @@ func main() {
 		{
 			authRoutes.Post("/register", handlers.RegisterFiber)
 			authRoutes.Post("/login", handlers.LoginFiber)
+			authRoutes.Post("/logout", middleware.AuthRequiredFiber(), handlers.LogoutFiber)
 			authRoutes.Post("/refresh", handlers.RefreshTokenFiber)
+			authRoutes.Post("/forgot-password", handlers.ForgotPasswordFiber)
+			authRoutes.Post("/reset-password", handlers.ResetPasswordFiber)
 		}
 
 		// Protected auth routes
 		authProtected := v1.Group("/auth", middleware.AuthRequiredFiber())
 		{
 			authProtected.Get("/me", handlers.GetMeFiber)
+			authProtected.Post("/change-password", handlers.ChangePasswordFiber)
+			
+			// 2FA routes
+			authProtected.Post("/2fa/setup", handlers.TwoFactorSetupFiber)
+			authProtected.Post("/2fa/verify", handlers.TwoFactorVerifyFiber)
+			authProtected.Post("/2fa/disable", handlers.TwoFactorDisableFiber)
+		}
+
+		// API Keys (protected)
+		apiKeys := v1.Group("/api-keys", middleware.AuthRequiredFiber())
+		{
+			apiKeys.Post("", handlers.CreateAPIKeyFiber)
+			apiKeys.Get("", handlers.ListAPIKeysFiber)
+			apiKeys.Delete("/:id", handlers.DeleteAPIKeyFiber)
+		}
+
+		// Notifications (protected)
+		notifications := v1.Group("/notifications", middleware.AuthRequiredFiber())
+		{
+			notifications.Get("", handlers.GetNotificationsFiber)
+			notifications.Post("/read", handlers.MarkNotificationsReadFiber)
 		}
 
 		// Protected routes (require authentication)
@@ -193,39 +217,39 @@ func main() {
 			// Dataset management
 			datasets := protected.Group("/datasets")
 			{
-				datasets.Post("/upload", handlers.InitiateUploadFiber)
-				datasets.Post("/:id/complete", handlers.CompleteUploadFiber)
-				datasets.Get("", handlers.ListDatasetsFiber)
-				datasets.Get("/:id", handlers.GetDatasetFiber)
-				datasets.Delete("/:id", handlers.DeleteDatasetFiber)
+				datasets.Post("/upload", middleware.RequireScopes("write:datasets"), handlers.InitiateUploadFiber)
+				datasets.Post("/:id/complete", middleware.RequireScopes("write:datasets"), handlers.CompleteUploadFiber)
+				datasets.Get("", middleware.RequireScopes("read:datasets"), handlers.ListDatasetsFiber)
+				datasets.Get("/:id", middleware.RequireScopes("read:datasets"), handlers.GetDatasetFiber)
+				datasets.Delete("/:id", middleware.RequireScopes("write:datasets"), handlers.DeleteDatasetFiber)
 			}
 
 			// Validation jobs
 			validations := protected.Group("/validations")
 			{
-				validations.Post("/create", handlers.CreateValidationFiber)
-				validations.Get("", handlers.ListValidationsFiber)
-				validations.Get("/:id", handlers.GetValidationFiber)
-				validations.Get("/:id/report", handlers.GetValidationReportFiber)
-				validations.Get("/:id/certificate", handlers.GetValidationCertificateFiber)
-				validations.Get("/:id/collapse-details", handlers.GetCollapseDetailsFiber)
-				validations.Get("/:id/recommendations", handlers.GetRecommendationsFiber)
+				validations.Post("/create", middleware.RequireScopes("write:validations"), handlers.CreateValidationFiber)
+				validations.Get("", middleware.RequireScopes("read:validations"), handlers.ListValidationsFiber)
+				validations.Get("/:id", middleware.RequireScopes("read:validations"), handlers.GetValidationFiber)
+				validations.Get("/:id/report", middleware.RequireScopes("read:validations"), handlers.GetValidationReportFiber)
+				validations.Get("/:id/certificate", middleware.RequireScopes("read:validations"), handlers.GetValidationCertificateFiber)
+				validations.Get("/:id/collapse-details", middleware.RequireScopes("read:validations"), handlers.GetCollapseDetailsFiber)
+				validations.Get("/:id/recommendations", middleware.RequireScopes("read:validations"), handlers.GetRecommendationsFiber)
 			}
 
 			// Warranty management
 			warranties := protected.Group("/warranties")
 			{
-				warranties.Post("/:validation_id/request", handlers.RequestWarrantyFiber)
-				warranties.Get("", handlers.ListWarrantiesFiber)
-				warranties.Get("/:id", handlers.GetWarrantyFiber)
-				warranties.Post("/:id/claim", handlers.FileWarrantyClaimFiber)
+				warranties.Post("/:validation_id/request", middleware.RequireScopes("write:warranties"), handlers.RequestWarrantyFiber)
+				warranties.Get("", middleware.RequireScopes("read:warranties"), handlers.ListWarrantiesFiber)
+				warranties.Get("/:id", middleware.RequireScopes("read:warranties"), handlers.GetWarrantyFiber)
+				warranties.Post("/:id/claim", middleware.RequireScopes("write:warranties"), handlers.FileWarrantyClaimFiber)
 			}
 
 			// Analytics
 			analytics := protected.Group("/analytics")
 			{
-				analytics.Get("/usage", handlers.GetUsageAnalyticsFiber)
-				analytics.Get("/validation-history", handlers.GetValidationHistoryFiber)
+				analytics.Get("/usage", middleware.RequireScopes("read:analytics"), handlers.GetUsageAnalyticsFiber)
+				analytics.Get("/validation-history", middleware.RequireScopes("read:analytics"), handlers.GetValidationHistoryFiber)
 			}
 		}
 	}
