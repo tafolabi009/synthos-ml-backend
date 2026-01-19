@@ -95,6 +95,80 @@ func runMigrations(pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`,
 
+		// Sessions table for session management
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id VARCHAR(255) PRIMARY KEY,
+			user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			refresh_token_hash VARCHAR(255) NOT NULL,
+			user_agent TEXT,
+			ip_address VARCHAR(45),
+			is_valid BOOLEAN DEFAULT true,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP NOT NULL,
+			last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			revoked_at TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_is_valid ON sessions(is_valid)`,
+
+		// Token blacklist table
+		`CREATE TABLE IF NOT EXISTS token_blacklist (
+			id SERIAL PRIMARY KEY,
+			token_hash VARCHAR(255) NOT NULL UNIQUE,
+			user_id VARCHAR(255) NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_blacklist_token_hash ON token_blacklist(token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_blacklist_expires_at ON token_blacklist(expires_at)`,
+
+		// Notifications table
+		`CREATE TABLE IF NOT EXISTS notifications (
+			id VARCHAR(255) PRIMARY KEY,
+			user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			type VARCHAR(50) NOT NULL,
+			title VARCHAR(255) NOT NULL,
+			message TEXT NOT NULL,
+			data JSONB,
+			is_read BOOLEAN DEFAULT false,
+			read_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read)`,
+
+		// API keys table
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id VARCHAR(255) PRIMARY KEY,
+			user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name VARCHAR(255) NOT NULL,
+			key_prefix VARCHAR(12) NOT NULL,
+			key_hash VARCHAR(255) NOT NULL,
+			scopes TEXT[] DEFAULT '{}',
+			rate_limit INT DEFAULT 1000,
+			is_active BOOLEAN DEFAULT true,
+			last_used_at TIMESTAMP,
+			expires_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			revoked_at TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
+
+		// Security events table
+		`CREATE TABLE IF NOT EXISTS security_events (
+			id SERIAL PRIMARY KEY,
+			user_id VARCHAR(255),
+			event_type VARCHAR(50) NOT NULL,
+			success BOOLEAN NOT NULL,
+			ip_address VARCHAR(45),
+			user_agent TEXT,
+			details JSONB,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_events_user_id ON security_events(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_events_event_type ON security_events(event_type)`,
+
 		// Datasets table
 		`CREATE TABLE IF NOT EXISTS datasets (
 			id VARCHAR(255) PRIMARY KEY,
