@@ -101,9 +101,9 @@ func LoadProduction(ctx context.Context) (*ProductionConfig, error) {
 		
 		// CORS - production safe origins
 		AllowedOrigins: getEnvList("ALLOWED_ORIGINS", []string{
-			"https://app.synthos.ai",
-			"https://www.synthos.ai",
-			"https://synthos.ai",
+			"https://www.synthos.dev",
+			"https://synthos.dev",
+			"https://app.synthos.dev",
 		}),
 		
 		// Monitoring

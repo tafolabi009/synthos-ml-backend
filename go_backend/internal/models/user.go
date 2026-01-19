@@ -8,15 +8,15 @@ import (
 type User struct {
 	ID                  string     `json:"user_id" db:"id"`
 	Email               string     `json:"email" db:"email"`
-	Username            string     `json:"username" db:"username"`
+	Username            *string    `json:"username" db:"username"`
 	PasswordHash        string     `json:"-" db:"password_hash"`
-	FullName            string     `json:"full_name" db:"full_name"`
-	CompanyID           string     `json:"company_id" db:"company_id"`
-	CompanyName         string     `json:"company_name" db:"company_name"`
-	Role                string     `json:"role" db:"role"`
-	SubscriptionTier    string     `json:"subscription_tier" db:"subscription_tier"`
+	FullName            *string    `json:"full_name" db:"full_name"`
+	CompanyID           *string    `json:"company_id" db:"company_id"`
+	CompanyName         *string    `json:"company_name" db:"company_name"`
+	Role                *string    `json:"role" db:"role"`
+	SubscriptionTier    *string    `json:"subscription_tier" db:"subscription_tier"`
 	TwoFactorEnabled    bool       `json:"two_factor_enabled" db:"two_factor_enabled"`
-	TwoFactorSecret     string     `json:"-" db:"two_factor_secret"`       // Never exposed
+	TwoFactorSecret     *string    `json:"-" db:"two_factor_secret"`       // Never exposed
 	TwoFactorBackupCodes []string  `json:"-" db:"two_factor_backup_codes"` // Never exposed
 	FailedLoginAttempts int        `json:"-" db:"failed_login_attempts"`
 	LockedUntil         *time.Time `json:"-" db:"locked_until"`
@@ -49,20 +49,46 @@ type UserProfile struct {
 
 // ToProfile converts a User to a safe UserProfile
 func (u *User) ToProfile() *UserProfile {
-	roles := []string{u.Role}
-	if u.Role == "admin" {
+	role := "user"
+	if u.Role != nil {
+		role = *u.Role
+	}
+	roles := []string{role}
+	if role == "admin" {
 		roles = append(roles, "user")
 	}
+	
+	username := ""
+	if u.Username != nil {
+		username = *u.Username
+	}
+	fullName := ""
+	if u.FullName != nil {
+		fullName = *u.FullName
+	}
+	companyID := ""
+	if u.CompanyID != nil {
+		companyID = *u.CompanyID
+	}
+	companyName := ""
+	if u.CompanyName != nil {
+		companyName = *u.CompanyName
+	}
+	subscriptionTier := "free"
+	if u.SubscriptionTier != nil {
+		subscriptionTier = *u.SubscriptionTier
+	}
+	
 	return &UserProfile{
 		ID:               u.ID,
 		Email:            u.Email,
-		Username:         u.Username,
-		FullName:         u.FullName,
-		CompanyID:        u.CompanyID,
-		CompanyName:      u.CompanyName,
-		Role:             u.Role,
+		Username:         username,
+		FullName:         fullName,
+		CompanyID:        companyID,
+		CompanyName:      companyName,
+		Role:             role,
 		Roles:            roles,
-		SubscriptionTier: u.SubscriptionTier,
+		SubscriptionTier: subscriptionTier,
 		TwoFactorEnabled: u.TwoFactorEnabled,
 		EmailVerified:    u.EmailVerified,
 		IsActive:         u.IsActive,

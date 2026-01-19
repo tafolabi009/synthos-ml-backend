@@ -23,6 +23,19 @@ const (
 	resetTokenTTL     = 1 * time.Hour
 )
 
+// Helper to safely dereference string pointer
+func strVal(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// Helper to create string pointer
+func strPtr(s string) *string {
+	return &s
+}
+
 // RegisterFiber handles user registration with full validation
 // POST /api/v1/auth/register
 func RegisterFiber(c *fiber.Ctx) error {
@@ -89,13 +102,13 @@ func RegisterFiber(c *fiber.Ctx) error {
 	user := models.User{
 		ID:               "usr_" + uuid.New().String()[:8],
 		Email:            strings.ToLower(strings.TrimSpace(req.Email)),
-		Username:         strings.ToLower(strings.TrimSpace(username)),
+		Username:         strPtr(strings.ToLower(strings.TrimSpace(username))),
 		PasswordHash:     passwordHash,
-		FullName:         strings.TrimSpace(req.FullName),
-		CompanyID:        "cmp_" + uuid.New().String()[:8],
-		CompanyName:      strings.TrimSpace(req.CompanyName),
-		Role:             "user",
-		SubscriptionTier: "free",
+		FullName:         strPtr(strings.TrimSpace(req.FullName)),
+		CompanyID:        strPtr("cmp_" + uuid.New().String()[:8]),
+		CompanyName:      strPtr(strings.TrimSpace(req.CompanyName)),
+		Role:             strPtr("user"),
+		SubscriptionTier: strPtr("free"),
 		TwoFactorEnabled: false,
 		EmailVerified:    false,
 		IsActive:         true,
@@ -167,6 +180,7 @@ func LoginFiber(c *fiber.Ctx) error {
 	userRepo := repository.NewUserRepository(database.GetDB())
 	user, err := userRepo.GetByEmail(ctx, strings.ToLower(strings.TrimSpace(req.Email)))
 	if err != nil {
+		log.Printf("Login failed for %s: %v", req.Email, err) // Debug logging
 		logSecurityEvent(ctx, "", "login_failed", false, c.IP(), c.Get("User-Agent"), map[string]string{"email": req.Email, "reason": "user_not_found"})
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -227,7 +241,7 @@ func LoginFiber(c *fiber.Ctx) error {
 		}
 
 		// Validate TOTP code
-		if !auth.ValidateTOTPCode(req.TOTPCode, user.TwoFactorSecret) {
+		if !auth.ValidateTOTPCode(req.TOTPCode, strVal(user.TwoFactorSecret)) {
 			// Check backup codes
 			if idx, valid := auth.ValidateBackupCode(req.TOTPCode, user.TwoFactorBackupCodes); valid {
 				// Remove used backup code
@@ -255,7 +269,7 @@ func LoginFiber(c *fiber.Ctx) error {
 
 	// Generate tokens with full claims
 	accessToken, err := auth.GenerateTokenWithClaims(
-		user.ID, user.Email, user.Username, user.CompanyID, user.Role, sessionID, accessTokenTTL,
+		user.ID, user.Email, strVal(user.Username), strVal(user.CompanyID), strVal(user.Role), sessionID, accessTokenTTL,
 	)
 	if err != nil {
 		log.Printf("Failed to generate access token: %v", err)
@@ -268,7 +282,7 @@ func LoginFiber(c *fiber.Ctx) error {
 	}
 
 	refreshToken, err := auth.GenerateTokenWithClaims(
-		user.ID, user.Email, user.Username, user.CompanyID, user.Role, sessionID, refreshTokenTTL,
+		user.ID, user.Email, strVal(user.Username), strVal(user.CompanyID), strVal(user.Role), sessionID, refreshTokenTTL,
 	)
 	if err != nil {
 		log.Printf("Failed to generate refresh token: %v", err)
@@ -431,7 +445,7 @@ func RefreshTokenFiber(c *fiber.Ctx) error {
 
 	// Generate new access token
 	accessToken, err := auth.GenerateTokenWithClaims(
-		claims.UserID, claims.Email, user.Username, claims.CompanyID, user.Role, newSessionID, accessTokenTTL,
+		claims.UserID, claims.Email, strVal(user.Username), claims.CompanyID, strVal(user.Role), newSessionID, accessTokenTTL,
 	)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -444,7 +458,7 @@ func RefreshTokenFiber(c *fiber.Ctx) error {
 
 	// Token rotation: generate new refresh token and blacklist the old one
 	newRefreshToken, err := auth.GenerateTokenWithClaims(
-		claims.UserID, claims.Email, user.Username, claims.CompanyID, user.Role, newSessionID, refreshTokenTTL,
+		claims.UserID, claims.Email, strVal(user.Username), claims.CompanyID, strVal(user.Role), newSessionID, refreshTokenTTL,
 	)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -806,5 +820,103 @@ func logSecurityEvent(ctx context.Context, userID, eventType string, success boo
 		UserAgent: userAgent,
 		Details:   detailsJSON,
 		CreatedAt: time.Now().UTC(),
+	})
+}
+
+// AdminResetPasswordFiber - TEMPORARY endpoint for admin password reset
+// This should be removed or properly secured in production
+// POST /api/v1/auth/admin-reset
+func AdminResetPasswordFiber(c *fiber.Ctx) error {
+	type ResetReq struct {
+		AdminKey    string `json:"admin_key"`
+		Email       string `json:"email"`
+		NewPassword string `json:"new_password"`
+	}
+
+	var req ResetReq
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Simple admin key check - replace with proper auth in production
+	if req.AdminKey != "SynthOS2024AdminKey!" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid admin key"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userRepo := repository.NewUserRepository(database.GetDB())
+	user, err := userRepo.GetByEmail(ctx, strings.ToLower(strings.TrimSpace(req.Email)))
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	// Hash new password
+	passwordHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+	}
+
+	// Update password
+	err = userRepo.UpdatePassword(ctx, user.ID, passwordHash, time.Now().UTC())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update password"})
+	}
+
+	// Reset failed login attempts
+	_ = userRepo.UpdateLoginAttempts(ctx, user.ID, 0, nil)
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Password reset successfully",
+		"user_id": user.ID,
+	})
+}
+
+// DebugDBFiber - TEMPORARY debug endpoint for checking database state
+// GET /api/v1/auth/debug-db
+func DebugDBFiber(c *fiber.Ctx) error {
+	adminKey := c.Query("key")
+	if adminKey != "SynthOS2024AdminKey!" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid key"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+	
+	// Check table columns
+	var columns []string
+	rows, err := db.Query(ctx, `
+		SELECT column_name 
+		FROM information_schema.columns 
+		WHERE table_name = 'users' 
+		ORDER BY ordinal_position
+	`)
+	if err != nil {
+		return c.JSON(fiber.Map{"error": err.Error()})
+	}
+	defer rows.Close()
+	
+	for rows.Next() {
+		var col string
+		rows.Scan(&col)
+		columns = append(columns, col)
+	}
+
+	// Check user count
+	var userCount int
+	db.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&userCount)
+
+	// Try to get a sample user (just email and id)
+	var sampleEmail, sampleID string
+	db.QueryRow(ctx, "SELECT id, email FROM users LIMIT 1").Scan(&sampleID, &sampleEmail)
+
+	return c.JSON(fiber.Map{
+		"columns":      columns,
+		"user_count":   userCount,
+		"sample_user":  fiber.Map{"id": sampleID, "email": sampleEmail},
 	})
 }

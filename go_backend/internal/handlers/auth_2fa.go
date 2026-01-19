@@ -263,7 +263,11 @@ func TwoFactorDisableFiber(c *fiber.Ctx) error {
 	}
 
 	// Verify TOTP code or backup code
-	valid := auth.ValidateTOTPCode(req.Code, user.TwoFactorSecret)
+	secret := ""
+	if user.TwoFactorSecret != nil {
+		secret = *user.TwoFactorSecret
+	}
+	valid := auth.ValidateTOTPCode(req.Code, secret)
 	if !valid {
 		if _, valid = auth.ValidateBackupCode(req.Code, user.TwoFactorBackupCodes); !valid {
 			logSecurityEvent(ctx, userID.(string), "2fa_disable_failed", false, c.IP(), c.Get("User-Agent"), map[string]string{"reason": "invalid_code"})

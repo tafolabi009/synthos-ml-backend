@@ -186,8 +186,8 @@ func RequireRole(roles ...string) fiber.Handler {
 				defer cancel()
 				userRepo := repository.NewUserRepository(database.GetDB())
 				user, err := userRepo.GetByID(ctx, userID.(string))
-				if err == nil {
-					userRole = user.Role
+				if err == nil && user.Role != nil {
+					userRole = *user.Role
 				}
 			}
 		}

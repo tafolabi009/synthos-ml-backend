@@ -72,9 +72,13 @@ func GetUsageAnalyticsFiber(c *fiber.Ctx) error {
 	}
 
 	validationsLimit := 10
-	if user.SubscriptionTier == "professional" {
+	tier := ""
+	if user.SubscriptionTier != nil {
+		tier = *user.SubscriptionTier
+	}
+	if tier == "professional" {
 		validationsLimit = 20
-	} else if user.SubscriptionTier == "enterprise" {
+	} else if tier == "enterprise" {
 		validationsLimit = 100
 	}
 
