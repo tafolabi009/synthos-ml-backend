@@ -23,8 +23,28 @@ from dataclasses import dataclass
 from scipy import stats
 from scipy.spatial import distance
 import logging
+import gc
 
 logger = logging.getLogger(__name__)
+
+
+def cleanup_gpu_memory():
+    """Force GPU memory cleanup to prevent OOM"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    gc.collect()
+
+
+# SynthOS CUDA Kernel Integration
+# Provides 2-5x speedup for spectral entropy computation
+try:
+    from synthos_kernel import SynthOSKernel
+    _SYNTHOS_AVAILABLE = True
+    logger.info("SynthOS kernel module available")
+except ImportError:
+    _SYNTHOS_AVAILABLE = False
+    logger.debug("SynthOS kernel not available, using PyTorch fallback")
 
 
 @dataclass
@@ -79,6 +99,22 @@ class CollapseDetector:
     def __init__(self, config: Optional[CollapseConfig] = None):
         self.config = config or CollapseConfig()
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.config.use_gpu else "cpu")
+        
+        # Initialize SynthOS kernel for accelerated spectral analysis
+        self._synthos_kernel = None
+        self._use_synthos = False
+        
+        if _SYNTHOS_AVAILABLE and self.device.type == 'cuda':
+            try:
+                self._synthos_kernel = SynthOSKernel()
+                self._use_synthos = True
+                logger.info(
+                    f"SynthOS kernel initialized: {self._synthos_kernel.active_arch} "
+                    f"(expected speedup: {self._synthos_kernel.get_performance_info()['expected_speedup']:.1f}x)"
+                )
+            except Exception as e:
+                logger.warning(f"SynthOS kernel initialization failed, using PyTorch: {e}")
+        
         logger.info(f"CollapseDetector initialized on {self.device}")
     
     async def detect_collapse(
@@ -101,6 +137,12 @@ class CollapseDetector:
             CollapseScore with detailed dimension analysis
         """
         logger.info("Starting multi-dimensional collapse detection...")
+        
+        # Convert PyTorch tensors to numpy if needed
+        if isinstance(synthetic_data, torch.Tensor):
+            synthetic_data = synthetic_data.detach().cpu().numpy()
+        if isinstance(original_data, torch.Tensor):
+            original_data = original_data.detach().cpu().numpy()
         
         # Handle empty data
         if synthetic_data.size == 0 or original_data.size == 0:
@@ -193,6 +235,21 @@ class CollapseDetector:
             warnings=warnings,
             predictions=predictions
         )
+    
+    async def detect_collapse_with_cleanup(
+        self,
+        synthetic_data: np.ndarray,
+        original_data: np.ndarray,
+        training_history: Optional[List[Dict]] = None
+    ) -> CollapseScore:
+        """
+        Detect collapse with automatic GPU memory cleanup.
+        Use this for long-running inference pipelines.
+        """
+        try:
+            return await self.detect_collapse(synthetic_data, original_data, training_history)
+        finally:
+            cleanup_gpu_memory()
     
     # ==================== DIMENSION 1: DISTRIBUTION FIDELITY ====================
     
@@ -663,16 +720,28 @@ class CollapseDetector:
         freq_match = (synth_dom_freq == orig_dom_freq).float().mean().item()
         metrics['dominant_frequency_match'] = freq_match * 100
         
-        # 3. Spectral entropy
-        synth_spectral_entropy = -torch.sum(
-            F.normalize(synth_psd, p=1, dim=0) * torch.log(F.normalize(synth_psd, p=1, dim=0) + 1e-10),
-            dim=0
-        ).mean().item()
-        
-        orig_spectral_entropy = -torch.sum(
-            F.normalize(orig_psd, p=1, dim=0) * torch.log(F.normalize(orig_psd, p=1, dim=0) + 1e-10),
-            dim=0
-        ).mean().item()
+        # 3. Spectral entropy - OPTIMIZED with SynthOS fused CUDA kernel
+        if self._use_synthos and self._is_valid_for_synthos(synth_tensor):
+            # Use fused CUDA kernel (single kernel launch vs 4-5 with PyTorch)
+            # Achieves 2-5x speedup depending on GPU architecture
+            synth_spectral_entropy = self._synthos_kernel.compute_spectral_entropy(
+                synth_tensor
+            ).mean().item()
+            
+            orig_spectral_entropy = self._synthos_kernel.compute_spectral_entropy(
+                orig_tensor
+            ).mean().item()
+        else:
+            # Fallback to PyTorch implementation
+            synth_spectral_entropy = -torch.sum(
+                F.normalize(synth_psd, p=1, dim=0) * torch.log(F.normalize(synth_psd, p=1, dim=0) + 1e-10),
+                dim=0
+            ).mean().item()
+            
+            orig_spectral_entropy = -torch.sum(
+                F.normalize(orig_psd, p=1, dim=0) * torch.log(F.normalize(orig_psd, p=1, dim=0) + 1e-10),
+                dim=0
+            ).mean().item()
         
         entropy_ratio = synth_spectral_entropy / (orig_spectral_entropy + 1e-10)
         entropy_score = 100 * np.exp(-abs(entropy_ratio - 1))
@@ -698,6 +767,23 @@ class CollapseDetector:
             metrics=metrics,
             severity=severity
         )
+    
+    def _is_valid_for_synthos(self, tensor: torch.Tensor) -> bool:
+        """
+        Check if tensor is valid for SynthOS kernel processing.
+        
+        Requirements:
+            - 2D tensor [N_samples, N_channels]
+            - N_samples is power of 2
+            - N_samples in range [4, 8192]
+        """
+        if tensor.dim() != 2:
+            return False
+        n_samples = tensor.shape[0]
+        # Must be power of 2 and within supported range
+        if n_samples < 4 or n_samples > 8192:
+            return False
+        return (n_samples & (n_samples - 1)) == 0
     
     # ==================== DIMENSION 7: GENERALIZATION GAP ====================
     
@@ -798,7 +884,8 @@ class CollapseDetector:
                 # Convert statistic to score (lower statistic = more similar)
                 ad_score = 100 * np.exp(-ad_result.statistic / 10)
                 ad_scores.append(ad_score)
-            except:
+            except (ValueError, RuntimeError) as e:
+                logger.debug(f"Anderson-Darling test failed for column {i}: {e}")
                 ad_scores.append(50.0)  # Neutral on failure
         
         metrics['anderson_darling_score'] = np.mean(ad_scores)

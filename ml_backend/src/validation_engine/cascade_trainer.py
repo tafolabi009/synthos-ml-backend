@@ -650,7 +650,8 @@ class CascadeTrainer:
                 mem_allocated = torch.cuda.memory_allocated(gpu_id) / (1024**3)  # GB
                 mem_total = torch.cuda.get_device_properties(gpu_id).total_memory / (1024**3)
                 gpu_utilization[gpu_id] = (mem_allocated / mem_total) * 100
-            except:
+            except (RuntimeError, torch.cuda.CudaError) as e:
+                logger.debug(f"Could not get GPU {gpu_id} utilization: {e}")
                 gpu_utilization[gpu_id] = 0.0
         
         progress = CascadeProgress(

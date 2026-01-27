@@ -108,7 +108,6 @@ func RegisterFiber(c *fiber.Ctx) error {
 		CompanyID:        strPtr("cmp_" + uuid.New().String()[:8]),
 		CompanyName:      strPtr(strings.TrimSpace(req.CompanyName)),
 		Role:             strPtr("user"),
-		SubscriptionTier: strPtr("free"),
 		TwoFactorEnabled: false,
 		EmailVerified:    false,
 		IsActive:         true,
@@ -527,6 +526,79 @@ func GetMeFiber(c *fiber.Ctx) error {
 
 	// Return safe user profile (no sensitive fields)
 	return c.JSON(user.ToProfile())
+}
+
+// UpdateProfileFiber updates the current user's profile
+// PUT /api/v1/auth/me
+func UpdateProfileFiber(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "UNAUTHORIZED",
+				"message": "Authentication required",
+			},
+		})
+	}
+
+	var req models.UpdateProfileRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "INVALID_REQUEST",
+				"message": "Invalid request body",
+			},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userRepo := repository.NewUserRepository(database.GetDB())
+	
+	// Get existing user
+	user, err := userRepo.GetByID(ctx, userID.(string))
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "NOT_FOUND",
+				"message": "User not found",
+			},
+		})
+	}
+
+	// Update fields if provided
+	if req.FullName != "" {
+		user.FullName = &req.FullName
+	}
+	if req.Username != "" {
+		user.Username = &req.Username
+	}
+	if req.CompanyName != "" {
+		user.CompanyName = &req.CompanyName
+	}
+	if req.JobTitle != "" {
+		user.JobTitle = &req.JobTitle
+	}
+	if req.Phone != "" {
+		user.Phone = &req.Phone
+	}
+
+	// Save updates
+	if err := userRepo.Update(ctx, user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "UPDATE_FAILED",
+				"message": "Failed to update profile",
+			},
+		})
+	}
+
+	// Return updated profile
+	return c.JSON(fiber.Map{
+		"message": "Profile updated successfully",
+		"user":    user.ToProfile(),
+	})
 }
 
 // ChangePasswordFiber handles password change for authenticated users

@@ -1275,5 +1275,6 @@ Risk Factors:
         
         return rec
 
-# Backward compatibility alias
+# Backward compatibility aliases
 RecommendationEngine = AdvancedRecommendationEngine
+Recommender = AdvancedRecommendationEngine

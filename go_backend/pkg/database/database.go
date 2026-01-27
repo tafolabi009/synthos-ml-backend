@@ -42,9 +42,10 @@ func Init(databaseURL string) error {
 	db = pool
 	log.Println("✅ Database connection established")
 
-	// Run auto-migrations
+	// Run auto-migrations - fail fast if schema is invalid
 	if err := runMigrations(pool); err != nil {
-		log.Printf("⚠️ Migration warning: %v", err)
+		pool.Close()
+		return fmt.Errorf("database migration failed: %w", err)
 	}
 
 	return nil
@@ -90,6 +91,8 @@ func runMigrations(pool *pgxpool.Pool) error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title VARCHAR(100)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_company_id ON users(company_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
@@ -281,10 +284,10 @@ func runMigrations(pool *pgxpool.Pool) error {
 		`ALTER TABLE warranty_claims ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP`,
 	}
 
-	for _, migration := range migrations {
+	for i, migration := range migrations {
 		if _, err := pool.Exec(ctx, migration); err != nil {
-			log.Printf("Migration error: %v", err)
-			// Continue with other migrations
+			// Return immediately on migration failure - fail fast
+			return fmt.Errorf("migration %d failed: %w", i+1, err)
 		}
 	}
 

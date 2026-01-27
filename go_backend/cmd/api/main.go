@@ -20,10 +20,12 @@ import (
 	"github.com/tafolabi009/backend/go_backend/internal/auth"
 	"github.com/tafolabi009/backend/go_backend/internal/handlers"
 	"github.com/tafolabi009/backend/go_backend/internal/middleware"
+	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	configpkg "github.com/tafolabi009/backend/go_backend/pkg/config"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
 	"github.com/tafolabi009/backend/go_backend/pkg/grpcclient"
 	"github.com/tafolabi009/backend/go_backend/pkg/monitoring"
+	"github.com/tafolabi009/backend/go_backend/pkg/storage"
 	"github.com/tafolabi009/backend/go_backend/pkg/tracing"
 )
 
@@ -60,6 +62,39 @@ func main() {
 	} else {
 		defer grpcClients.Close()
 	}
+
+	// Initialize S3 client ONCE at startup using environment variables
+	s3Config := storage.S3Config{
+		Region:          getEnvOrDefault("AWS_REGION", "us-east-1"),
+		Bucket:          getEnvOrDefault("S3_BUCKET", "synthos-datasets-570116615008"),
+		AccessKeyID:     os.Getenv("AWS_ACCESS_KEY_ID"),     // Use env vars, empty = IAM role
+		SecretAccessKey: os.Getenv("AWS_SECRET_ACCESS_KEY"), // Use env vars, empty = IAM role
+		Endpoint:        os.Getenv("S3_ENDPOINT"),           // Optional: for S3-compatible services
+		UsePathStyle:    os.Getenv("S3_USE_PATH_STYLE") == "true",
+	}
+
+	s3Client, err := storage.NewS3Client(ctx, s3Config)
+	if err != nil {
+		log.Fatalf("Failed to initialize S3 client: %v", err)
+	}
+	log.Printf("✅ S3 client initialized for bucket: %s", s3Config.Bucket)
+
+	// Initialize ValidationClient for ML backend communication (optional - may not be available)
+	var validationClient *grpcclient.ValidationClient
+	validationAddr := getEnvOrDefault("VALIDATION_SERVICE_ADDR", cfg.ValidationServiceAddr)
+	if validationAddr != "" {
+		validationClient, err = grpcclient.NewValidationClient(validationAddr)
+		if err != nil {
+			log.Printf("⚠️ Failed to initialize ValidationClient (ML backend may be unavailable): %v", err)
+		} else {
+			defer validationClient.Close()
+			log.Printf("✅ ValidationClient connected to: %s", validationAddr)
+		}
+	}
+
+	// Initialize DatasetHandler with dependencies (Dependency Injection)
+	datasetRepo := repository.NewDatasetRepository(database.GetDB())
+	datasetHandler := handlers.NewDatasetHandler(s3Client, datasetRepo, validationClient)
 
 	// Initialize Jaeger tracing (if enabled)
 	if cfg.EnableTracing {
@@ -107,8 +142,15 @@ func main() {
 	}))
 
 	// CORS configuration - allow all frontend headers
+	corsOrigins := joinOrigins(cfg.AllowedOrigins)
+	// Ensure we never use wildcard with credentials
+	if corsOrigins == "" || corsOrigins == "*" {
+		corsOrigins = "https://synthos.dev,https://www.synthos.dev,https://app.synthos.dev"
+	}
+	log.Printf("CORS Origins configured: %s", corsOrigins)
+	
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     joinOrigins(cfg.AllowedOrigins),
+		AllowOrigins:     corsOrigins,
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
 		AllowHeaders:     "Content-Type,Authorization,X-Request-ID,X-Trace-ID,X-Requested-With,Accept,Origin,Cache-Control",
 		AllowCredentials: true,
@@ -180,6 +222,8 @@ func main() {
 		authProtected := v1.Group("/auth", middleware.AuthRequiredFiber())
 		{
 			authProtected.Get("/me", handlers.GetMeFiber)
+			authProtected.Put("/me", handlers.UpdateProfileFiber)
+			authProtected.Patch("/me", handlers.UpdateProfileFiber)
 			authProtected.Post("/change-password", handlers.ChangePasswordFiber)
 
 			// 2FA routes
@@ -206,14 +250,14 @@ func main() {
 		// Protected routes (require authentication)
 		protected := v1.Group("", middleware.AuthRequiredFiber())
 		{
-			// Dataset management
+			// Dataset management - using injected handler
 			datasets := protected.Group("/datasets")
 			{
-				datasets.Post("/upload", middleware.RequireScopes("write:datasets"), handlers.InitiateUploadFiber)
-				datasets.Post("/:id/complete", middleware.RequireScopes("write:datasets"), handlers.CompleteUploadFiber)
-				datasets.Get("", middleware.RequireScopes("read:datasets"), handlers.ListDatasetsFiber)
-				datasets.Get("/:id", middleware.RequireScopes("read:datasets"), handlers.GetDatasetFiber)
-				datasets.Delete("/:id", middleware.RequireScopes("write:datasets"), handlers.DeleteDatasetFiber)
+				datasets.Post("/upload", middleware.RequireScopes("write:datasets"), datasetHandler.InitiateUploadFiber)
+				datasets.Post("/:id/complete", middleware.RequireScopes("write:datasets"), datasetHandler.CompleteUploadFiber)
+				datasets.Get("", middleware.RequireScopes("read:datasets"), datasetHandler.ListDatasetsFiber)
+				datasets.Get("/:id", middleware.RequireScopes("read:datasets"), datasetHandler.GetDatasetFiber)
+				datasets.Delete("/:id", middleware.RequireScopes("write:datasets"), datasetHandler.DeleteDatasetFiber)
 			}
 
 			// Validation jobs
@@ -380,4 +424,12 @@ func joinOrigins(origins []string) string {
 		result += origin
 	}
 	return result
+}
+
+// getEnvOrDefault returns the environment variable value or a default
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

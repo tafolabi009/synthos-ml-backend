@@ -178,8 +178,9 @@ class CollapseLocalizer:
                     grad_norms = torch.norm(batch.grad, dim=1).cpu().numpy()
                 else:
                     grad_norms = np.zeros(len(batch))
-            except:
+            except (RuntimeError, ValueError, torch.cuda.CudaError) as e:
                 # Fallback if model forward fails
+                logger.debug(f"Gradient computation failed: {e}")
                 grad_norms = np.zeros(len(batch))
             
             influence_scores.extend(grad_norms)
@@ -241,8 +242,9 @@ class CollapseLocalizer:
         # Inverse covariance (precision matrix)
         try:
             precision = torch.linalg.inv(cov)
-        except:
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
             # Fallback: use identity if inversion fails
+            logger.debug(f"Matrix inversion failed, using identity: {e}")
             precision = torch.eye(cov.shape[0], device=self.device)
         
         # Mahalanobis distance for each point

@@ -1,87 +1,103 @@
-# 🚀 Quick Start: Testing the Improvements
+# 🚀 Testing Guide: Synthos ML Backend
 
-This guide helps you quickly test all the production improvements made to the ML Backend.
+This guide helps you run tests and verify the ML Backend functionality.
+
+> ⚠️ **Status: Alpha** - Testing framework in place, coverage target is 70%+
 
 ---
 
 ## ⚡ Quick Test (1 minute)
 
 ```bash
+cd ml_backend
+
 # Run the automated test script
 ./run_tests.sh
 ```
 
 This will:
-- ✅ Run code quality checks
+- ✅ Run code quality checks (ruff, black, mypy)
 - ✅ Run unit tests with coverage
 - ✅ Run integration tests
 - ✅ Generate coverage report
 
 ---
 
-## 📋 What Was Improved?
+## 📋 Test Structure
 
-### ✅ Fixed Critical Issues
-1. **Dependencies**: Fixed broken imports (pynvml)
-2. **Status**: Removed false "Production Ready" claims
-3. **Code Quality**: Added linting, formatting, type checking
-4. **Error Handling**: Added retries, circuit breakers, timeouts
-5. **Tests**: 42+ real tests replacing 3 fake ones
-6. **Monitoring**: Prometheus metrics ready
-7. **CI/CD**: GitHub Actions pipeline
-8. **Benchmarking**: Load testing framework
-
-### 📊 Test Coverage
-- **Before**: ~5% (3 fake tests that mock everything)
-- **Now**: ~30%+ (42+ real tests)
-- **Target**: 70%+
+```
+tests/
+├── unit/                           # Unit tests
+│   ├── test_collapse_detector.py   # 13 tests - collapse detection
+│   └── test_diversity_analyzer.py  # 14 tests - diversity analysis
+├── integration/                    # Integration tests
+│   └── test_full_pipeline.py       # 15 tests - end-to-end
+└── load/                           # Load/benchmark tests
+    └── test_load.py                # Performance benchmarks
+```
 
 ---
 
-## 🧪 Running Tests Manually
+## 🧪 Running Tests
 
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+### All Tests
 
-### 2. Unit Tests
 ```bash
-# Run all unit tests
-pytest tests/unit/ -v
+# Run all tests
+pytest tests/ -v
 
 # With coverage
-pytest tests/unit/ -v --cov=src --cov-report=html
+pytest tests/ -v --cov=src --cov-report=html
+
+# Generate HTML coverage report
+open htmlcov/index.html
+```
+
+### Unit Tests Only
+
+```bash
+pytest tests/unit/ -v
 
 # Specific test file
 pytest tests/unit/test_collapse_detector.py -v
+
+# Specific test
+pytest tests/unit/test_collapse_detector.py::TestCollapseDetector::test_healthy_data_passes -v
 ```
 
-### 3. Integration Tests
-```bash
-# Full pipeline tests
-pytest tests/integration/test_full_pipeline.py -v
+### Integration Tests
 
-# With timeout
+```bash
+pytest tests/integration/ -v
+
+# With timeout (for long-running tests)
 pytest tests/integration/ -v --timeout=300
 ```
 
-### 4. Load/Benchmark Tests
+### Load/Benchmark Tests
+
 ```bash
-# Run performance benchmarks
 python tests/load/test_load.py
 
 # Results saved to: benchmark_results.json
 ```
 
-### 5. Code Quality
+---
+
+## 📊 Code Quality Checks
+
 ```bash
 # Linting
 ruff check src/ tests/
 
+# Fix linting issues automatically
+ruff check src/ tests/ --fix
+
 # Formatting check
 black --check src/ tests/
+
+# Format code
+black src/ tests/
 
 # Type checking
 mypy src/ --ignore-missing-imports
@@ -89,102 +105,37 @@ mypy src/ --ignore-missing-imports
 
 ---
 
-## 📈 Understanding Test Results
+## 📈 Test Coverage
 
-### Unit Tests (`tests/unit/`)
-- **test_collapse_detector.py**: 13 tests
-  - Tests actual collapse detection logic
-  - Tests with healthy, collapsed, and edge-case data
-  - Validates dimension scoring
-  
-- **test_diversity_analyzer.py**: 14 tests
-  - Tests diversity scoring on real data
-  - Tests multiple file formats
-  - Validates statistical calculations
+### Current Status
+- **Unit tests**: ~30% coverage
+- **Target**: 70%+ coverage
 
-### Integration Tests (`tests/integration/`)
-- **test_full_pipeline.py**: 15 tests
-  - End-to-end pipeline execution
-  - API compliance validation
-  - Error handling verification
-  - Timing and resource tracking
-
-### Load Tests (`tests/load/`)
-- **test_load.py**: Benchmark framework
-  - Tests at multiple scales (1K, 10K, 100K, 1M+ rows)
-  - Measures real performance (not estimates!)
-  - Tracks memory and CPU usage
-  - Generates JSON reports
-
----
-
-## 🔍 Viewing Coverage Reports
-
-After running tests with coverage:
+### Generate Coverage Report
 
 ```bash
-# Coverage is saved to htmlcov/
-# Open in browser:
-
-# Mac
-open htmlcov/index.html
-
-# Linux
-xdg-open htmlcov/index.html
-
-# Or just navigate to the directory
-cd htmlcov
-python -m http.server 8000
-# Then visit http://localhost:8000
+pytest tests/ --cov=src --cov-report=html
 ```
 
-**What to look for:**
-- **Green**: Well-tested code
-- **Yellow**: Partially tested
-- **Red**: Untested code (needs attention)
+### View Coverage
+
+```bash
+# Open in browser
+open htmlcov/index.html
+
+# Or start local server
+cd htmlcov && python -m http.server 8000
+# Visit http://localhost:8000
+```
+
+**Coverage Legend:**
+- 🟢 **Green**: Well-tested code
+- 🟡 **Yellow**: Partially tested
+- 🔴 **Red**: Untested (needs attention)
 
 ---
 
-## 📊 Current Test Status
-
-### Passing Tests ✅
-- Unit tests for CollapseDetector
-- Unit tests for DiversityAnalyzer
-- Integration tests for full pipeline
-- Error handling tests
-- Edge case tests
-
-### Known Issues 🚧
-- Some tests may fail if custom wheel packages not installed
-- GPU tests skipped on CPU-only environments
-- Coverage still below 70% target
-
----
-
-## 🎯 Next Steps
-
-### For Developers
-1. **Run tests**: `./run_tests.sh`
-2. **Check coverage**: Open `htmlcov/index.html`
-3. **Add more tests**: Focus on red areas in coverage report
-4. **Run benchmarks**: `python tests/load/test_load.py`
-5. **Fix failing tests**: Check error messages
-
-### For Reviewers
-1. **Verify claims removed**: Check README.md for "Alpha" status
-2. **Check real tests**: Look at test files (not mocked)
-3. **Review coverage**: Aim for 70%+
-4. **Run pipeline**: Tests should pass in CI/CD
-
-### For Production
-1. ❌ **DO NOT** deploy yet (still alpha)
-2. ✅ **DO** run comprehensive testing
-3. ✅ **DO** measure real performance
-4. ✅ **DO** fix security issues first
-
----
-
-## 🔥 Running Specific Test Scenarios
+## 🔍 Test Scenarios
 
 ### Test Healthy Data Detection
 ```bash
@@ -197,6 +148,112 @@ pytest tests/unit/test_collapse_detector.py::TestCollapseDetector::test_collapse
 ```
 
 ### Test Error Handling
+```bash
+pytest tests/integration/test_full_pipeline.py::TestFullPipeline::test_error_handling_invalid_path -v
+```
+
+### Test Small Dataset
+```bash
+pytest tests/integration/test_full_pipeline.py::TestPipelineRobustness::test_small_dataset -v
+```
+
+---
+
+## 💡 Troubleshooting
+
+### "Module not found" errors
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+### "No tests ran"
+```bash
+# Make sure you're in the ml_backend directory
+cd /workspaces/ml_backend/ml_backend
+
+# Check test files exist
+ls tests/unit/
+ls tests/integration/
+```
+
+### Tests timeout
+```bash
+# Increase timeout
+pytest tests/integration/ -v --timeout=600
+```
+
+### Coverage not generated
+```bash
+# Install coverage
+pip install pytest-cov
+
+# Run with explicit coverage
+pytest --cov=src --cov-report=html
+```
+
+### GPU tests skipped
+Tests will automatically skip GPU-specific tests on CPU-only environments. This is expected behavior.
+
+---
+
+## ✅ Success Criteria
+
+Your tests are working if:
+1. ✅ `./run_tests.sh` completes without errors
+2. ✅ Coverage report generates in `htmlcov/`
+3. ✅ Most unit tests pass (some may skip on CPU)
+4. ✅ Integration tests complete within timeout
+5. ✅ Linting runs (may show warnings)
+
+---
+
+## 🚀 Adding New Tests
+
+### Unit Test Template
+
+```python
+import pytest
+from src.your_module import YourClass
+
+class TestYourClass:
+    def setup_method(self):
+        self.instance = YourClass()
+
+    def test_basic_functionality(self):
+        result = self.instance.method()
+        assert result is not None
+
+    def test_edge_case(self):
+        with pytest.raises(ValueError):
+            self.instance.method(invalid_input=True)
+```
+
+### Integration Test Template
+
+```python
+import pytest
+import asyncio
+from src.orchestrator import SynthosOrchestrator
+
+class TestIntegration:
+    @pytest.fixture
+    def orchestrator(self):
+        return SynthosOrchestrator()
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline(self, orchestrator):
+        result = await orchestrator.validate("test_data.csv", "csv")
+        assert result.status == "completed"
+```
+
+---
+
+**Remember**: This is ALPHA software. The goal is honest testing and steady improvement.
+
+**Status**: Testing framework solid. Keep building! 🚀
+
+*Last Updated: January 27, 2026*
 ```bash
 pytest tests/integration/test_full_pipeline.py::TestFullPipeline::test_error_handling_invalid_path -v
 ```

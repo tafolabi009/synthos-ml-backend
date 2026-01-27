@@ -17,18 +17,6 @@ func GetUsageAnalyticsFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	userRepo := repository.NewUserRepository(database.GetDB())
-	user, err := userRepo.GetByID(ctx, userID)
-	if err != nil {
-		log.Printf("Failed to fetch user: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fiber.Map{
-				"code":    "DATABASE_ERROR",
-				"message": "Failed to retrieve user information",
-			},
-		})
-	}
-
 	datasetRepo := repository.NewDatasetRepository(database.GetDB())
 	datasets, totalDatasets, err := datasetRepo.List(ctx, userID, 1, 1000)
 	if err != nil {
@@ -71,17 +59,7 @@ func GetUsageAnalyticsFiber(c *fiber.Ctx) error {
 		averageRiskScore = totalRiskScore / completedValidations
 	}
 
-	validationsLimit := 10
-	tier := ""
-	if user.SubscriptionTier != nil {
-		tier = *user.SubscriptionTier
-	}
-	if tier == "professional" {
-		validationsLimit = 20
-	} else if tier == "enterprise" {
-		validationsLimit = 100
-	}
-
+	// Enterprise platform - no usage limits, pay per validation via contract
 	now := time.Now()
 	period := now.Format("2006-01")
 
@@ -92,11 +70,10 @@ func GetUsageAnalyticsFiber(c *fiber.Ctx) error {
 		"total_rows_validated":  totalRowsValidated,
 		"average_risk_score":    averageRiskScore,
 		"warranty_contracts":    warrantyCount,
-		"subscription_tier":     user.SubscriptionTier,
-		"usage_limits": fiber.Map{
-			"validations_limit":     validationsLimit,
-			"validations_used":      totalValidations,
-			"validations_remaining": validationsLimit - totalValidations,
+		"billing_type":          "enterprise",
+		"usage": fiber.Map{
+			"validations_this_period": totalValidations,
+			"datasets_uploaded":       totalDatasets,
 		},
 	}
 

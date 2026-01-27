@@ -14,8 +14,8 @@ COPY . /app/
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install ML packages if they exist
-RUN pip install --no-cache-dir ../ml_backend/packages/*.whl 2>/dev/null || true
+# Install resonance_nn from NEURON_NEW repository
+RUN pip install --no-cache-dir git+https://github.com/tafolabi009/NEURON_NEW.git
 
 # Create directories
 RUN mkdir -p /data/signatures /cache

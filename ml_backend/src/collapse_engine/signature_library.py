@@ -567,8 +567,9 @@ class AdvancedSignatureLibrary:
                         dimension_scores, data_stats, top_k, similarity_threshold, explain=False
                     )
                 )
-        except:
+        except (RuntimeError, asyncio.InvalidStateError) as e:
             # Fallback to sync search
+            logger.debug(f"Async search failed, using sync fallback: {e}")
             raw_features = self._create_raw_features(dimension_scores, data_stats)
             with torch.no_grad():
                 raw_tensor = torch.from_numpy(raw_features).float().to(self.device)
@@ -1083,7 +1084,8 @@ class AdvancedSignatureLibrary:
         # Try to load autoencoder
         if self.model_path.exists():
             try:
-                self.autoencoder.load_state_dict(torch.load(self.model_path, map_location=self.device))
+                # SECURITY: weights_only=True prevents arbitrary code execution (CWE-502)
+                self.autoencoder.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=True))
                 logger.info("Loaded autoencoder model")
             except Exception as e:
                 logger.warning(f"Could not load autoencoder: {e}")
@@ -1150,7 +1152,8 @@ class AdvancedSignatureLibrary:
                 try:
                     index_cpu = faiss.index_gpu_to_cpu(self.active_index)
                     faiss.write_index(index_cpu, str(self.index_path))
-                except:
+                except (RuntimeError, AttributeError) as e:
+                    logger.debug(f"GPU to CPU conversion failed, saving directly: {e}")
                     faiss.write_index(self.active_index, str(self.index_path))
             else:
                 faiss.write_index(self.active_index, str(self.index_path))

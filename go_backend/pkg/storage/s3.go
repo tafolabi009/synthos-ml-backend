@@ -60,8 +60,8 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 				"",
 			)),
 		)
-	} else {
-		// Standard AWS S3
+	} else if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
+		// Standard AWS S3 with explicit credentials
 		awsCfg, err = config.LoadDefaultConfig(ctx,
 			config.WithRegion(cfg.Region),
 			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
@@ -69,6 +69,11 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 				cfg.SecretAccessKey,
 				"",
 			)),
+		)
+	} else {
+		// Use IAM role / default credential chain
+		awsCfg, err = config.LoadDefaultConfig(ctx,
+			config.WithRegion(cfg.Region),
 		)
 	}
 
@@ -164,7 +169,8 @@ func (c *S3Client) Download(ctx context.Context, key string, writer io.WriterAt)
 }
 
 // GeneratePresignedURL generates a presigned URL for upload or download
-func (c *S3Client) GeneratePresignedURL(ctx context.Context, key string, operation string, expiration time.Duration) (string, error) {
+// For PUT operations, contentType should be provided to prevent 403 signature mismatch errors
+func (c *S3Client) GeneratePresignedURL(ctx context.Context, key string, operation string, expiration time.Duration, contentType ...string) (string, error) {
 	presignClient := s3.NewPresignClient(c.client)
 
 	var presignedURL string
@@ -184,10 +190,15 @@ func (c *S3Client) GeneratePresignedURL(ctx context.Context, key string, operati
 		presignedURL = request.URL
 
 	case "PUT", "upload":
-		request, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
+		putInput := &s3.PutObjectInput{
 			Bucket: aws.String(c.config.Bucket),
 			Key:    aws.String(key),
-		}, func(opts *s3.PresignOptions) {
+		}
+		// Set Content-Type if provided to prevent AWS 403 signature mismatch errors
+		if len(contentType) > 0 && contentType[0] != "" {
+			putInput.ContentType = aws.String(contentType[0])
+		}
+		request, err := presignClient.PresignPutObject(ctx, putInput, func(opts *s3.PresignOptions) {
 			opts.Expires = expiration
 		})
 		if err != nil {

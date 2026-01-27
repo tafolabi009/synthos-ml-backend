@@ -206,6 +206,9 @@ class StorageFactory:
             config['endpoint_url'] = os.environ.get('S3_ENDPOINT_URL')
         
         elif provider == 'local':
-            config['base_path'] = os.environ.get('STORAGE_BASE_PATH', '/tmp/ml_backend_storage')
+            # Use secure temp directory or user-specified path
+            import tempfile
+            default_path = os.path.join(tempfile.gettempdir(), 'ml_backend_storage')
+            config['base_path'] = os.environ.get('STORAGE_BASE_PATH', default_path)
         
         return StorageFactory.create(config)

@@ -117,3 +117,93 @@ class ValidationServiceServicer(validation_pb2_grpc.ValidationServiceServicer):
                     **config
                 )
             )
+            
+            # Update job status
+            active_jobs[job_id]['status'] = 'completed'
+            active_jobs[job_id]['progress'] = 1.0
+            active_jobs[job_id]['completed_at'] = datetime.utcnow().isoformat()
+            
+            logger.info(f"Cascade training completed", extra={'trace_id': trace_id, 'job_id': job_id})
+            
+            return validation_pb2.TrainCascadeResponse(
+                job_id=job_id,
+                status='completed',
+                model_path=results.get('model_path', ''),
+                metrics=json.dumps(results.get('metrics', {}))
+            )
+            
+        except Exception as e:
+            logger.error(f"TrainCascade failed: {e}", extra={'trace_id': trace_id, 'job_id': job_id}, exc_info=True)
+            active_jobs[job_id] = {'status': 'failed', 'error': str(e)}
+            return validation_pb2.TrainCascadeResponse(
+                job_id=job_id,
+                status='failed',
+                error_message=str(e)
+            )
+    
+    def AnalyzeDiversity(self, request, context):
+        """Analyze diversity of a dataset"""
+        trace_id = dict(context.invocation_metadata()).get('x-trace-id', 'unknown')
+        logger.info(f"AnalyzeDiversity request received", extra={'trace_id': trace_id})
+        
+        try:
+            if self.diversity_analyzer is None:
+                config = StratificationConfig()
+                self.diversity_analyzer = DiversityAnalyzer(config)
+            
+            # Run analysis
+            # This is a placeholder - in production you'd load and analyze the dataset
+            return validation_pb2.AnalyzeDiversityResponse(
+                diversity_score=0.85,
+                metrics=json.dumps({'feature_coverage': 0.9, 'class_balance': 0.8})
+            )
+        except Exception as e:
+            logger.error(f"AnalyzeDiversity failed: {e}", extra={'trace_id': trace_id}, exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return validation_pb2.AnalyzeDiversityResponse(diversity_score=0.0)
+
+    def GetJobStatus(self, request, context):
+        """Get status of a training job"""
+        job_id = request.job_id
+        if job_id not in active_jobs:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            return validation_pb2.JobStatusResponse(status='not_found')
+        
+        job = active_jobs[job_id]
+        return validation_pb2.JobStatusResponse(
+            status=job['status'],
+            progress=job.get('progress', 0.0),
+            stage=job.get('stage', ''),
+            error_message=job.get('error', '')
+        )
+
+
+def serve():
+    """Start the gRPC server"""
+    port = os.getenv('GRPC_PORT', '50051')
+    
+    # Create log directory
+    os.makedirs('/var/log', exist_ok=True)
+    
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        options=[
+            ('grpc.max_send_message_length', 100 * 1024 * 1024),
+            ('grpc.max_receive_message_length', 100 * 1024 * 1024),
+        ]
+    )
+    validation_pb2_grpc.add_ValidationServiceServicer_to_server(
+        ValidationServiceServicer(), server
+    )
+    server.add_insecure_port(f'[::]:{port}')
+    server.start()
+    
+    logger.info(f"Validation Service started on port {port}", extra={'trace_id': 'startup'})
+    logger.info(f"GPU count: {torch.cuda.device_count()}", extra={'trace_id': 'startup'})
+    
+    server.wait_for_termination()
+
+
+if __name__ == '__main__':
+    serve()

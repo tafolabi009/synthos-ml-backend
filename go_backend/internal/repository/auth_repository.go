@@ -89,6 +89,8 @@ func (r *UserRepository) GetSession(ctx context.Context, sessionID string) (*mod
 		WHERE id = $1
 	`
 	session := &models.Session{}
+	// Use a pointer for revoked_at to safely handle NULL values
+	var revokedAt *time.Time
 	err := r.db.QueryRow(ctx, query, sessionID).Scan(
 		&session.ID,
 		&session.UserID,
@@ -99,11 +101,13 @@ func (r *UserRepository) GetSession(ctx context.Context, sessionID string) (*mod
 		&session.CreatedAt,
 		&session.ExpiresAt,
 		&session.LastUsedAt,
-		&session.RevokedAt,
+		&revokedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
+	// Assign the pointer - will be nil if NULL in database
+	session.RevokedAt = revokedAt
 	return session, nil
 }
 

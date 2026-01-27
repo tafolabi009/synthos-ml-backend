@@ -14,10 +14,136 @@ import traceback
 import yaml
 import sys
 import os
+import time
+from collections import defaultdict
+import gc
 
 # Add parent directories to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
+# ============================================================================
+# Rate Limiting Interceptor
+# ============================================================================
+
+class RateLimitInterceptor(aio.ServerInterceptor):
+    """
+    Token bucket rate limiter for gRPC endpoints.
+    Prevents DoS attacks by limiting requests per client.
+    """
+    
+    def __init__(
+        self,
+        requests_per_minute: int = 60,
+        burst_size: int = 10
+    ):
+        self.requests_per_minute = requests_per_minute
+        self.burst_size = burst_size
+        self.tokens = defaultdict(lambda: burst_size)
+        self.last_update = defaultdict(time.time)
+        self._lock = asyncio.Lock()
+        
+    async def _get_client_id(self, context) -> str:
+        """Extract client identifier from context"""
+        # Try to get peer info
+        peer = context.peer()
+        if peer:
+            return peer.split(':')[0] if ':' in peer else peer
+        return 'unknown'
+    
+    async def _check_rate_limit(self, client_id: str) -> bool:
+        """Check if request is within rate limit"""
+        async with self._lock:
+            now = time.time()
+            elapsed = now - self.last_update[client_id]
+            
+            # Refill tokens based on elapsed time
+            refill = elapsed * (self.requests_per_minute / 60.0)
+            self.tokens[client_id] = min(
+                self.burst_size,
+                self.tokens[client_id] + refill
+            )
+            self.last_update[client_id] = now
+            
+            # Check if we have tokens
+            if self.tokens[client_id] >= 1:
+                self.tokens[client_id] -= 1
+                return True
+            return False
+    
+    async def intercept_service(self, continuation, handler_call_details):
+        """Intercept and rate limit incoming requests"""
+        client_id = 'unknown'  # Will be updated in actual handler
+        
+        # Get the actual handler
+        handler = await continuation(handler_call_details)
+        
+        if handler is None:
+            return None
+            
+        # Wrap the handler with rate limiting
+        if handler.unary_unary:
+            original_handler = handler.unary_unary
+            
+            async def rate_limited_unary_unary(request, context):
+                client_id = await self._get_client_id(context)
+                if not await self._check_rate_limit(client_id):
+                    await context.abort(
+                        grpc.StatusCode.RESOURCE_EXHAUSTED,
+                        f"Rate limit exceeded. Max {self.requests_per_minute} requests/minute."
+                    )
+                return await original_handler(request, context)
+            
+            return grpc.unary_unary_rpc_method_handler(
+                rate_limited_unary_unary,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer
+            )
+        
+        return handler
+
+
+# ============================================================================
+# GPU Memory Manager
+# ============================================================================
+
+class GPUMemoryManager:
+    """Manages GPU memory cleanup to prevent OOM errors"""
+    
+    @staticmethod
+    def cleanup():
+        """Force GPU memory cleanup"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            gc.collect()
+        except Exception as e:
+            logger.debug(f"GPU cleanup failed: {e}")
+    
+    @staticmethod
+    def get_memory_stats() -> Dict[str, float]:
+        """Get current GPU memory statistics"""
+        stats = {}
+        try:
+            import torch
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    allocated = torch.cuda.memory_allocated(i) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(i) / (1024**3)
+                    total = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                    stats[f'gpu_{i}'] = {
+                        'allocated_gb': round(allocated, 2),
+                        'reserved_gb': round(reserved, 2),
+                        'total_gb': round(total, 2),
+                        'utilization_pct': round((allocated / total) * 100, 1)
+                    }
+        except Exception as e:
+            logger.debug(f"Could not get GPU stats: {e}")
+        return stats
+
 
 # Import generated protobuf code
 try:
@@ -470,7 +596,7 @@ class CollapseEngineServicer(validation_pb2_grpc.CollapseEngineServicer):
 
 async def serve(
     port: int = 50051,
-    use_mtls: bool = False,  # Disable mTLS for testing
+    use_mtls: bool = os.getenv('ENABLE_MTLS', 'true').lower() == 'true',  # SECURITY: mTLS enabled by default in production
     cert_dir: Path = Path("/etc/synthos/certs"),
     config_path: Path = Path("/workspaces/ml_backend/config/ml_config.yaml"),
     hardware_config_path: Path = Path("/workspaces/ml_backend/config/hardware_config.yaml")
@@ -485,7 +611,15 @@ async def serve(
     with open(hardware_config_path) as f:
         hardware_config = yaml.safe_load(f)
     
-    # Create server
+    # Initialize rate limiter
+    rate_limit_rpm = int(os.getenv('RATE_LIMIT_RPM', '60'))
+    rate_limit_burst = int(os.getenv('RATE_LIMIT_BURST', '10'))
+    rate_limiter = RateLimitInterceptor(
+        requests_per_minute=rate_limit_rpm,
+        burst_size=rate_limit_burst
+    )
+    
+    # Create server with rate limiting interceptor
     server = aio.server(
         futures.ThreadPoolExecutor(max_workers=10),
         options=[
@@ -493,8 +627,11 @@ async def serve(
             ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100MB
             ('grpc.keepalive_time_ms', 30000),
             ('grpc.keepalive_timeout_ms', 10000),
-        ]
+        ],
+        interceptors=[rate_limiter]
     )
+    
+    logger.info(f"Rate limiting enabled: {rate_limit_rpm} requests/min, burst: {rate_limit_burst}")
     
     # Add servicers
     validation_servicer = ValidationEngineServicer(config, hardware_config)

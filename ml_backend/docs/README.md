@@ -2,7 +2,9 @@
 
 **Advanced Spectral Neural Networks for AI Training Data Validation**
 
-**Hardware:** 4x NVIDIA H200 (80GB each) | **Architectures:** FFT-based Spectral Processing (NO attention)
+> ⚠️ **Status: Alpha** - Core implementation complete, comprehensive testing in progress.
+
+**Hardware Target:** 4x NVIDIA H200 (80GB each) | **Architecture:** FFT-based Spectral Processing (NO attention)
 
 ---
 
@@ -16,7 +18,7 @@ The **ML validation engine** that detects model collapse BEFORE training begins.
 1. **Diversity Analysis** → Stratified sampling (NOT random)
 2. **Pre-Screening** → Match against collapse signature library
 3. **Cascade Training** → Train 18 models across 3 tiers (streaming progress every 10s)
-4. **Collapse Detection** → Multi-dimensional analysis
+4. **Collapse Detection** → Multi-dimensional analysis (8 dimensions)
 5. **Localization & Recommendations** → Pinpoint exact problematic rows
 
 ---
@@ -32,8 +34,9 @@ The **ML validation engine** that detects model collapse BEFORE training begins.
   - `MultiHeadFrequencyLayer` - Processes different frequency bands
   - `AdvancedSpectralGating (ASG)` - **NOT attention!** Pure spectral gating
   - `SpectralFFN` - Feed-forward in frequency domain
+  - `HolographicMemory` - Pattern storage with provable capacity
 - **Complexity:** O(n log n) via FFT
-- **Context Length:** Up to 131K tokens (base model)
+- **Context Length:** Up to 260K+ tokens
 - **NO attention mechanism** - pure frequency-domain processing
 
 #### 2. **Temporal Eigenstate Networks (Secondary)**
@@ -220,27 +223,40 @@ def call_with_retry(stub_method, request, max_retries=3):
 ml_backend/
 ├── src/
 │   ├── validation_engine/
-│   │   ├── cascade_trainer.py       # Multi-scale training
-│   │   ├── diversity_analyzer.py    # Stratified sampling
-│   │   └── signature_library.py     # Collapse patterns DB
+│   │   ├── cascade_trainer.py       # Multi-scale training (18 models)
+│   │   └── diversity_analyzer.py    # Stratified sampling & scoring
 │   │
 │   ├── collapse_engine/
-│   │   ├── detector.py              # Multi-dimensional detection
+│   │   ├── detector.py              # 8-dimensional collapse detection
 │   │   ├── localizer.py             # Gradient-based localization
-│   │   └── recommender.py           # Fix generation
+│   │   ├── recommender.py           # Fix generation
+│   │   ├── recommender_advanced.py  # Advanced recommendations with causality
+│   │   ├── signature_library.py     # Collapse patterns DB (FAISS)
+│   │   └── signature_library_advanced.py # Enhanced signature matching
 │   │
 │   ├── data_processors/
-│   │   ├── dataset_loader.py        # Universal format loader
-│   │   └── sampler.py               # Stratified sampling logic
+│   │   └── dataset_loader.py        # Universal format loader
 │   │
 │   ├── grpc_services/
-│   │   ├── validation_server.py     # gRPC server (mTLS)
-│   │   └── client_example.py        # Example client
+│   │   ├── validation_server.py     # gRPC server
+│   │   ├── validation_server_complete.py # Full servicer implementation
+│   │   ├── validation_pb2.py        # Generated protobuf
+│   │   └── validation_pb2_grpc.py   # Generated gRPC stubs
+│   │
+│   ├── storage/
+│   │   ├── factory.py               # Storage provider factory
+│   │   ├── local_provider.py        # Local filesystem storage
+│   │   ├── s3_provider.py           # AWS S3 storage
+│   │   └── gcs_provider.py          # Google Cloud Storage
+│   │
+│   ├── connections/                 # External service connections
+│   │
+│   ├── model_architectures.py       # Resonance NN model definitions
+│   ├── orchestrator.py              # Unified pipeline coordinator
 │   │
 │   └── utils/
-│       ├── gpu_manager.py           # 4x H200 orchestration
-│       ├── metrics.py               # FFT-specific metrics
-│       └── logging_config.py        # Structured logging
+│       ├── gpu_optimizer.py         # GPU memory & mixed precision
+│       └── error_handling.py        # Retries, circuit breakers
 │
 ├── proto/
 │   └── validation.proto             # gRPC service definitions
@@ -250,12 +266,17 @@ ml_backend/
 │   └── ml_config.yaml               # Model configurations
 │
 ├── tests/
-│   ├── test_cascade.py
-│   ├── test_collapse.py
-│   └── test_grpc.py
+│   ├── unit/                        # Unit tests
+│   ├── integration/                 # Integration tests
+│   └── load/                        # Load/benchmark tests
 │
-├── resonance_nn-0.1.0-py3-none-any.whl          # FFT-based models
-└── README.md                        # This file
+├── examples/
+│   └── complete_pipeline.py         # End-to-end demo
+│
+├── server.py                        # Unified gRPC server entry point
+├── server_production.py             # Production server with monitoring
+├── requirements.txt
+└── Makefile
 ```
 
 ---
@@ -299,15 +320,14 @@ for chunk in loader.stream_chunks("dataset.parquet"):
 ### 1. Install Dependencies
 
 ```bash
-# Install custom architectures
-pip install resonance_nn-0.1.0-py3-none-any.whl
+cd ml_backend
+pip install -r requirements.txt
 
-# Install other requirements
-pip install torch>=2.0.0 grpcio grpcio-tools
-pip install pandas pyarrow h5py pyyaml
+# Install custom Resonance NN architecture (if available)
+pip install resonance-neural-networks
 ```
 
-### 2. Generate gRPC Code
+### 2. Generate gRPC Code (if needed)
 
 ```bash
 python -m grpc_tools.protoc \
@@ -320,48 +340,41 @@ python -m grpc_tools.protoc \
 ### 3. Start gRPC Server
 
 ```bash
-# With mTLS (production)
-python -m src.grpc_services.validation_server \
-    --port 50051 \
-    --use-mtls \
-    --cert-dir /etc/synthos/certs
+# Development mode
+python server.py
 
-# Without mTLS (development only)
-python -m src.grpc_services.validation_server \
-    --port 50051 \
-    --no-mtls
+# Production mode with monitoring
+python server_production.py
 ```
 
-### 4. Test with Sample Data
+### 4. Use the Orchestrator (Recommended)
 
 ```python
-import grpc
-from src.grpc_services import validation_pb2, validation_pb2_grpc
+import asyncio
+from src.orchestrator import SynthosOrchestrator
 
-# Create channel with mTLS
-credentials = grpc.ssl_channel_credentials(
-    root_certificates=open('/etc/synthos/certs/ca.crt', 'rb').read(),
-    private_key=open('/etc/synthos/certs/client.key', 'rb').read(),
-    certificate_chain=open('/etc/synthos/certs/client.crt', 'rb').read()
-)
-channel = grpc.secure_channel('localhost:50051', credentials)
-stub = validation_pb2_grpc.ValidationEngineStub(channel)
-
-# Call service
-request = validation_pb2.CascadeRequest(
-    dataset_id="ds_test123",
-    validation_id="val_test456",
-    sample_s3_path="s3://bucket/sample.parquet",
-    config=validation_pb2.CascadeConfig(
-        target_architecture="resonance_nn",
-        vocab_size=50257
+async def validate_dataset():
+    orchestrator = SynthosOrchestrator(
+        collapse_threshold=65.0,      # Minimum quality score
+        diversity_threshold=50.0,     # Minimum diversity score
     )
-)
+    
+    result = await orchestrator.validate(
+        dataset_path="data.parquet",
+        dataset_format="parquet",
+        output_report_path="report.json"
+    )
+    
+    if result.approved_for_training:
+        print(f"✅ APPROVED! Score: {result.collapse_score:.1f}/100")
+    else:
+        print(f"❌ REJECTED: {result.reason}")
+        for rec in result.recommendations:
+            print(f"  💡 {rec['description']}")
+    
+    return result
 
-# Stream progress updates
-for progress in stub.TrainCascade(request):
-    print(f"Progress: {progress.progress_percent:.1f}% "
-          f"({progress.models_completed}/{progress.models_total})")
+result = asyncio.run(validate_dataset())
 ```
 
 ---
@@ -379,52 +392,42 @@ for progress in stub.TrainCascade(request):
 
 ---
 
-## 🔧 GPU Optimization (4x H200)
+## 🔧 8-Dimensional Collapse Detection
 
-### Memory Management
+The collapse detector analyzes these dimensions:
 
-```yaml
-# config/hardware_config.yaml
-memory_optimization:
-  gradient_accumulation_steps: 2
-  max_memory_usage_percent: 90
-  enable_cpu_offload: false      # Not needed with 320GB total
-  clear_cache_between_models: true
-```
+| Dimension | Description |
+|-----------|-------------|
+| **Mode Collapse** | Repeated/clustered outputs |
+| **Spectral Degradation** | Loss of frequency content |
+| **Gradient Pathology** | Vanishing/exploding gradients |
+| **Distribution Shift** | Data distribution changes |
+| **Diversity Loss** | Reduction in output variety |
+| **Memorization** | Overfitting to training data |
+| **Quality Degradation** | Output quality decline |
+| **Pattern Repetition** | Repeating patterns |
 
-### Parallel Training Strategy
-
-- **Tier 1:** 2 GPUs, 5 models per GPU (10 total in parallel)
-- **Tier 2:** 3 GPUs, distribute 5 models across GPUs
-- **Tier 3:** 4 GPUs, Data Parallel (DDP) for each large model
-
-### FFT Optimization
-
-```python
-# Use cuFFT (CUDA FFT library) for H200
-config = {
-    'fft_backend': 'cufft',  # Optimized for NVIDIA
-    'use_fused_ops': True,   # Fuse FFT operations
-    'compile_models': True    # torch.compile for additional speed
-}
-```
+Each dimension scored 0-100 (higher = better).
 
 ---
 
 ## 🧪 Testing
 
 ```bash
-# Run unit tests
-pytest tests/test_cascade.py -v
+# Run all tests with coverage
+./run_tests.sh
 
-# Test gRPC server
-pytest tests/test_grpc.py -v
+# Or run manually
+pytest tests/ -v --cov=src --cov-report=html
 
-# Load test (simulate cascade training)
-python tests/load_test_cascade.py --num-models 18
+# Unit tests only
+pytest tests/unit/ -v
 
-# GPU memory test
-python tests/test_gpu_memory.py --gpus 4
+# Integration tests
+pytest tests/integration/ -v
+
+# Load/benchmark tests
+python tests/load/test_load.py
 ```
 
 ---
@@ -451,59 +454,25 @@ python tests/test_gpu_memory.py --gpus 4
 
 ---
 
-## 🤝 Team Communication
-
-### Questions for Backend Team
-
-1. **Data Format:** What format will datasets be in S3? (Recommend Parquet)
-2. **Authentication:** How do we get mTLS certificates? (cert rotation?)
-3. **Error Handling:** Should we implement circuit breaker pattern?
-4. **Cost Tracking:** Do you need real-time GPU cost updates?
-5. **Monitoring:** What metrics should we expose? (Prometheus?)
-
-### What We Need from Backend
-
-- S3 read credentials
-- mTLS certificates (server cert, CA cert)
-- Dataset IDs and validation IDs (UUID format?)
-- gRPC endpoint to call back for status updates
-- Error escalation process (who to notify on failures?)
-
----
-
-## 📚 Additional Resources
-
-- **Resonance NN Docs:** See `INSTALLATION_GUIDE.md`
-- **Temporal Eigenstate:** Architecture in `src/model.py`
-- **gRPC Best Practices:** Official guide
-- **mTLS Setup:** See `docs/mtls_setup.md` (TODO)
-
----
-
 ## 🐛 Common Issues
 
 ### Issue: "CUDA out of memory"
-**Solution:** Reduce batch size in `config/hardware_config.yaml` or enable gradient checkpointing
+**Solution:** Reduce batch size or set GPU_MEMORY_FRACTION lower:
+```bash
+export GPU_MEMORY_FRACTION=0.7
+```
 
 ### Issue: "gRPC deadline exceeded"
-**Solution:** Increase timeout in client:
-```python
-channel = grpc.secure_channel(
-    'localhost:50051', 
-    credentials,
-    options=[('grpc.max_receive_message_length', 100 * 1024 * 1024)]
-)
+**Solution:** Increase timeout in client or set GRPC_MAX_MESSAGE_SIZE:
+```bash
+export GRPC_MAX_MESSAGE_SIZE=100000000
 ```
 
-### Issue: "mTLS handshake failed"
-**Solution:** Check certificate validity:
-```bash
-openssl verify -CAfile ca.crt server.crt
-openssl verify -CAfile ca.crt client.crt
-```
+### Issue: Model training fails
+**Solution:** Check logs and ensure ENABLE_MIXED_PRECISION is set correctly for your hardware.
 
 ---
 
 **Built with ❤️ and FFT | O(n log n) > O(n²) | No attention, just science**
 
-*Last Updated: October 31, 2025*
+*Last Updated: January 27, 2026*

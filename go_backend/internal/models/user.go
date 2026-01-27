@@ -6,26 +6,27 @@ import (
 
 // User represents a system user with full profile data
 type User struct {
-	ID                  string     `json:"user_id" db:"id"`
-	Email               string     `json:"email" db:"email"`
-	Username            *string    `json:"username" db:"username"`
-	PasswordHash        string     `json:"-" db:"password_hash"`
-	FullName            *string    `json:"full_name" db:"full_name"`
-	CompanyID           *string    `json:"company_id" db:"company_id"`
-	CompanyName         *string    `json:"company_name" db:"company_name"`
-	Role                *string    `json:"role" db:"role"`
-	SubscriptionTier    *string    `json:"subscription_tier" db:"subscription_tier"`
-	TwoFactorEnabled    bool       `json:"two_factor_enabled" db:"two_factor_enabled"`
-	TwoFactorSecret     *string    `json:"-" db:"two_factor_secret"`       // Never exposed
-	TwoFactorBackupCodes []string  `json:"-" db:"two_factor_backup_codes"` // Never exposed
-	FailedLoginAttempts int        `json:"-" db:"failed_login_attempts"`
-	LockedUntil         *time.Time `json:"-" db:"locked_until"`
-	PasswordChangedAt   *time.Time `json:"password_changed_at,omitempty" db:"password_changed_at"`
-	EmailVerified       bool       `json:"email_verified" db:"email_verified"`
-	IsActive            bool       `json:"is_active" db:"is_active"`
-	LastLoginAt         *time.Time `json:"last_login_at,omitempty" db:"last_login_at"`
-	CreatedAt           time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at" db:"updated_at"`
+	ID                   string     `json:"user_id" db:"id"`
+	Email                string     `json:"email" db:"email"`
+	Username             *string    `json:"username" db:"username"`
+	PasswordHash         string     `json:"-" db:"password_hash"`
+	FullName             *string    `json:"full_name" db:"full_name"`
+	CompanyID            *string    `json:"company_id" db:"company_id"`
+	CompanyName          *string    `json:"company_name" db:"company_name"`
+	JobTitle             *string    `json:"job_title" db:"job_title"`
+	Phone                *string    `json:"phone" db:"phone"`
+	Role                 *string    `json:"role" db:"role"`
+	TwoFactorEnabled     bool       `json:"two_factor_enabled" db:"two_factor_enabled"`
+	TwoFactorSecret      *string    `json:"-" db:"two_factor_secret"`       // Never exposed
+	TwoFactorBackupCodes []string   `json:"-" db:"two_factor_backup_codes"` // Never exposed
+	FailedLoginAttempts  int        `json:"-" db:"failed_login_attempts"`
+	LockedUntil          *time.Time `json:"-" db:"locked_until"`
+	PasswordChangedAt    *time.Time `json:"password_changed_at,omitempty" db:"password_changed_at"`
+	EmailVerified        bool       `json:"email_verified" db:"email_verified"`
+	IsActive             bool       `json:"is_active" db:"is_active"`
+	LastLoginAt          *time.Time `json:"last_login_at,omitempty" db:"last_login_at"`
+	CreatedAt            time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // UserProfile is a safe representation of user data for API responses
@@ -37,14 +38,17 @@ type UserProfile struct {
 	FullName         string     `json:"full_name"`
 	CompanyID        string     `json:"company_id"`
 	CompanyName      string     `json:"company_name"`
+	JobTitle         string     `json:"job_title"`
+	Phone            string     `json:"phone"`
 	Role             string     `json:"role"`
 	Roles            []string   `json:"roles"` // Expanded roles for frontend compatibility
-	SubscriptionTier string     `json:"subscription_tier"`
+	BillingType      string     `json:"billing_type"` // Always "enterprise" - pay per validation
 	TwoFactorEnabled bool       `json:"two_factor_enabled"`
 	EmailVerified    bool       `json:"email_verified"`
 	IsActive         bool       `json:"is_active"`
 	LastLoginAt      *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // ToProfile converts a User to a safe UserProfile
@@ -74,9 +78,13 @@ func (u *User) ToProfile() *UserProfile {
 	if u.CompanyName != nil {
 		companyName = *u.CompanyName
 	}
-	subscriptionTier := "free"
-	if u.SubscriptionTier != nil {
-		subscriptionTier = *u.SubscriptionTier
+	jobTitle := ""
+	if u.JobTitle != nil {
+		jobTitle = *u.JobTitle
+	}
+	phone := ""
+	if u.Phone != nil {
+		phone = *u.Phone
 	}
 	
 	return &UserProfile{
@@ -86,14 +94,17 @@ func (u *User) ToProfile() *UserProfile {
 		FullName:         fullName,
 		CompanyID:        companyID,
 		CompanyName:      companyName,
+		JobTitle:         jobTitle,
+		Phone:            phone,
 		Role:             role,
 		Roles:            roles,
-		SubscriptionTier: subscriptionTier,
+		BillingType:      "enterprise", // Enterprise platform - pay per validation
 		TwoFactorEnabled: u.TwoFactorEnabled,
 		EmailVerified:    u.EmailVerified,
 		IsActive:         u.IsActive,
 		LastLoginAt:      u.LastLoginAt,
 		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        u.UpdatedAt,
 	}
 }
 
@@ -104,6 +115,15 @@ type RegisterRequest struct {
 	Username    string `json:"username" validate:"omitempty,min=3,max=50,alphanum"`
 	FullName    string `json:"full_name" validate:"required,min=1,max=100"`
 	CompanyName string `json:"company_name" validate:"required,min=1,max=200"`
+}
+
+// UpdateProfileRequest is the request body for updating user profile
+type UpdateProfileRequest struct {
+	FullName    string `json:"full_name" validate:"omitempty,min=1,max=100"`
+	Username    string `json:"username" validate:"omitempty,min=3,max=50,alphanum"`
+	CompanyName string `json:"company_name" validate:"omitempty,min=1,max=200"`
+	JobTitle    string `json:"job_title" validate:"omitempty,max=100"`
+	Phone       string `json:"phone" validate:"omitempty,max=20"`
 }
 
 // LoginRequest is the request body for user login

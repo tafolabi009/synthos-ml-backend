@@ -429,8 +429,8 @@ def get_model_info(model):
             complexity = model.get_complexity_estimate(1024)  # Estimate for 1K tokens
             info['complexity_class'] = complexity.get('complexity_class', 'Unknown')
             info['operations'] = complexity.get('total', 0)
-        except:
-            pass
+        except (RuntimeError, ValueError, AttributeError) as e:
+            logger.debug(f"Could not get complexity estimate: {e}")
     
     return info
 

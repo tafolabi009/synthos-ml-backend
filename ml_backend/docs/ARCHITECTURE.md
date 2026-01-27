@@ -6,12 +6,12 @@
 
 ### Hardware Setup: Development on CPU, Target: GPU Deployment
 - **Current**: Development on CPU codespace
-- **Target**: GPU instance for performance testing
-- **Production**: TBD based on benchmarks
+- **Target**: GPU instance for performance testing (H200, A100)
+- **Production**: RunPod, AWS, or on-premise GPU clusters
 
 ### Custom Architectures (Experimental)
 
-**⚠️ Note**: Using custom Resonance NN architecture from separate repository.
+**⚠️ Note**: Using custom Resonance NN architecture from NEURON_NEW repository.
 Benchmarks against standard architectures pending.
 
 #### 1. Resonance NN (v3.0.0) - Experimental
@@ -19,8 +19,9 @@ Benchmarks against standard architectures pending.
 ✅ FFT-based spectral processing (O(n log n))
 ✅ HierarchicalFFT + MultiHeadFrequencyLayer
 ✅ AdvancedSpectralGating (ASG) - NO attention!
-✅ Context length: up to 131K tokens
-✅ Models: tiny (76M), small (454M), base (983M)
+✅ HolographicMemory for pattern storage
+✅ Context length: up to 260K+ tokens
+✅ Models: tiny (76M), small (454M), base (983M), medium (1.8B), large (3.9B)
 ```
 
 #### 2. Temporal Eigenstate Networks (v0.1.0)
@@ -32,56 +33,71 @@ Benchmarks against standard architectures pending.
 
 ---
 
-## 📦 Project Structure Created
+## 📦 Current Project Structure
 
 ```
 /workspaces/ml_backend/
-├── src/
-│   ├── validation_engine/
-│   │   ├── __init__.py                 ✅ CREATED
-│   │   ├── diversity_analyzer.py       ✅ CREATED (full implementation)
-│   │   └── cascade_trainer.py          ✅ CREATED (full implementation)
-│   ├── collapse_engine/
-│   │   ├── __init__.py                 ✅ CREATED
-│   │   ├── detector.py                 ✅ CREATED (8 dimensions)
-│   │   ├── signature_library.py        ✅ CREATED (FAISS + HDF5)
-│   │   ├── localizer.py                ✅ CREATED (gradient attribution)
-│   │   └── recommender.py              ✅ CREATED (prioritized fixes)
-│   ├── data_processors/
-│   │   ├── __init__.py                 ✅ CREATED
-│   │   └── dataset_loader.py           ✅ CREATED (all formats)
-│   ├── grpc_services/
-│   │   ├── validation_server.py        ✅ CREATED (mTLS + errors)
-│   │   ├── validation_pb2.py           ✅ GENERATED
-│   │   └── validation_pb2_grpc.py      ✅ GENERATED
-│   └── utils/
-│       ├── __init__.py                 ✅ CREATED
-│       └── gpu_optimizer.py            ✅ CREATED (mixed precision, profiling)
+├── ml_backend/                      # Core ML validation engine
+│   ├── src/
+│   │   ├── validation_engine/
+│   │   │   ├── cascade_trainer.py   ✅ Multi-scale cascade training
+│   │   │   └── diversity_analyzer.py ✅ Stratified diversity analysis
+│   │   ├── collapse_engine/
+│   │   │   ├── detector.py          ✅ 8-dimensional collapse detection
+│   │   │   ├── signature_library.py ✅ FAISS-based signature matching
+│   │   │   ├── localizer.py         ✅ Gradient-based localization
+│   │   │   ├── recommender.py       ✅ Prioritized recommendations
+│   │   │   └── recommender_advanced.py ✅ Causal analysis
+│   │   ├── data_processors/
+│   │   │   └── dataset_loader.py    ✅ Universal format loader
+│   │   ├── grpc_services/
+│   │   │   ├── validation_server.py ✅ gRPC server
+│   │   │   └── validation_server_complete.py ✅ Full servicer
+│   │   ├── storage/                 ✅ S3/GCS/Local providers
+│   │   ├── utils/
+│   │   │   ├── gpu_optimizer.py     ✅ GPU memory management
+│   │   │   └── error_handling.py    ✅ Retries, circuit breakers
+│   │   ├── orchestrator.py          ✅ Unified pipeline coordinator
+│   │   └── model_architectures.py   ✅ Resonance NN definitions
+│   ├── config/                      ✅ YAML configuration
+│   ├── proto/                       ✅ Protocol buffer definitions
+│   ├── tests/                       ✅ Unit/integration/load tests
+│   ├── server.py                    ✅ Main gRPC entry point
+│   └── server_production.py         ✅ Production server
 │
-├── proto/
-│   └── validation.proto                ✅ CREATED (complete spec)
+├── validation_service/              # Standalone validation service
+│   ├── validation_engine/           ✅ Self-contained cascade trainer
+│   ├── server.py                    ✅ gRPC server
+│   └── requirements.txt
 │
-├── config/
-│   ├── hardware_config.yaml            ✅ CREATED (4x H200)
-│   └── ml_config.yaml                  ✅ CREATED (FFT config)
+├── collapse_service/                # Standalone collapse service
+│   ├── collapse_engine/             ✅ Self-contained detection
+│   ├── server.py                    ✅ gRPC server
+│   └── requirements.txt
 │
-├── scripts/
-│   └── generate_certs.sh               ✅ CREATED (mTLS certificates)
+├── go_backend/                      # REST API Gateway (Fiber)
+│   ├── cmd/api/main.go              ✅ Entry point
+│   ├── internal/handlers/           ✅ Request handlers
+│   ├── internal/middleware/         ✅ Auth, CORS, logging
+│   └── pkg/                         ✅ Config, database, gRPC clients
 │
-├── examples/
-│   └── complete_pipeline.py            ✅ CREATED (end-to-end demo)
+├── job_orchestrator/                # Job queue management
+│   └── main.go                      ✅ Pipeline coordination
 │
-├── data/
-│   └── signatures/                     ✅ CREATED (signature storage)
+├── proto/                           # Shared protobuf definitions
+│   ├── validation.proto             ✅ Validation service
+│   ├── collapse.proto               ✅ Collapse service
+│   └── orchestrator.proto           ✅ Job orchestration
 │
-├── requirements.txt                     ✅ CREATED
-├── README.md                            ✅ CREATED (full docs)
-└── ARCHITECTURE.md                      ✅ CREATED (this file)
+├── migrations/                      ✅ Database migrations
+├── monitoring/                      ✅ Prometheus + Grafana
+├── scripts/                         ✅ Deployment scripts
+└── docker-compose.yml               ✅ Full stack orchestration
 ```
 
 ---
 
-## 🎯 What We Built
+## 🎯 What's Implemented
 
 ### 1. Dataset Loader (ALL Major Formats)
 **File:** `src/data_processors/dataset_loader.py`
@@ -93,135 +109,110 @@ Supports:
 - Streaming for large datasets ✅
 - Fast metadata extraction ✅
 
-```python
-loader = DatasetLoader()
-metadata = loader.get_metadata("data.parquet")  # Fast preview
-for chunk in loader.stream_chunks("data.parquet"):
-    process(chunk)  # Memory-efficient streaming
-```
-
 ### 2. Multi-Scale Cascade Trainer
 **File:** `src/validation_engine/cascade_trainer.py`
 
 Features:
 - ✅ Trains 18 models (10 + 5 + 3) across 3 tiers
 - ✅ Uses Resonance NN FFT-based models
-- ✅ Parallel training on 4x H200 GPUs
+- ✅ Parallel training on multiple GPUs
 - ✅ Streams progress every 10 seconds
 - ✅ FFT-specific spectral metrics
 - ✅ Automatic collapse detection
-- ✅ Gradient statistics tracking
 
-```python
-trainer = CascadeTrainer(dataset_id, validation_id, config, hardware_config)
-results = await trainer.train_cascade(train_data, val_data, vocab_size)
-# Automatically streams progress every 10s via callback
-```
+### 3. Collapse Detection (8 Dimensions)
+**File:** `src/collapse_engine/detector.py`
 
-### 3. gRPC Service with mTLS
-**File:** `src/grpc_services/validation_server.py`
+Dimensions analyzed:
+- ✅ Mode collapse
+- ✅ Spectral degradation
+- ✅ Gradient pathology
+- ✅ Distribution shift
+- ✅ Diversity loss
+- ✅ Memorization
+- ✅ Quality degradation
+- ✅ Pattern repetition
+
+### 4. Unified Orchestrator
+**File:** `src/orchestrator.py`
 
 Features:
-- ✅ Complete ValidationEngine + CollapseEngine services
-- ✅ mTLS authentication (service-to-service)
-- ✅ Comprehensive error handling decorator
-- ✅ Automatic retry logic support
-- ✅ Streaming progress updates (every 10s)
+- ✅ Links all 6 stages automatically
+- ✅ API-compliant output format
+- ✅ Error handling with retries
+- ✅ Progress streaming
+- ✅ Warranty eligibility calculation
+
+### 5. gRPC Services
+**Files:** `src/grpc_services/`, `server.py`
+
+Features:
+- ✅ ValidationEngine service
+- ✅ CollapseEngine service
+- ✅ Async streaming support
 - ✅ 100MB message size support
-- ✅ GPU utilization tracking
-
-```python
-# Error categories: Data, Model, Resource, Timeout
-@handle_errors  # Catches all errors, returns proper gRPC status
-async def TrainCascade(self, request, context):
-    # Streams progress every 10 seconds
-    async for progress in trainer.train_cascade(...):
-        yield progress
-```
-
-### 4. Protocol Buffers Definition
-**File:** `proto/validation.proto`
-
-Services:
-- ✅ ValidationEngine (Phase 2-5)
-  - AnalyzeDiversity
-  - PreScreenRisk
-  - TrainCascade (streaming)
-  - GetPredictions
-  
-- ✅ CollapseEngine (Phase 5-6)
-  - DetectCollapse
-  - LocalizeProblems
-  - GenerateRecommendations
-
-- ✅ ErrorInfo in all responses
-- ✅ Support for all data formats
-- ✅ GPU utilization in progress updates
-
-### 5. Configuration Files
-
-**hardware_config.yaml:**
-- ✅ 4x H200 GPU configuration
-- ✅ Per-tier GPU allocation
-- ✅ FFT optimization settings
-- ✅ Distributed training (NCCL)
-- ✅ Cost tracking enabled
-
-**ml_config.yaml:**
-- ✅ Resonance NN configurations (3 tiers)
-- ✅ Temporal Eigenstate settings
-- ✅ FFT-specific parameters
-- ✅ Cascade training hyperparameters
-- ✅ Collapse detection thresholds
+- ✅ Graceful shutdown handling
 
 ---
 
 ## 📊 Data Flow
 
 ```
-Backend → gRPC (mTLS) → ValidationEngine
-                              ↓
-                    Load Dataset (all formats)
-                              ↓
-                    Diversity Analysis (stratified)
-                              ↓
-                    Pre-Screen (signature library)
-                              ↓
-                    Cascade Training (18 models)
-                    Stream progress every 10s →
-                              ↓
-                    Collapse Detection
-                              ↓
-                    Localization + Recommendations
-                              ↓
-Backend ← gRPC (mTLS) ← Final Results
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         API Gateway (Go/Fiber)                           │
+│                 REST API → Authentication → Rate Limiting                │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ REST/gRPC
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Job Orchestrator (Go)                               │
+│              Job Queue → Pipeline Coordination → Status Updates          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ gRPC
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      ML Backend (Python)                                 │
+│                                                                          │
+│   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐ │
+│   │   Dataset   │ → │  Diversity  │ → │   Cascade   │ → │  Collapse   │ │
+│   │   Loader    │   │  Analyzer   │   │   Trainer   │   │  Detector   │ │
+│   └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘ │
+│                                                                │         │
+│                                                                ▼         │
+│                           ┌─────────────┐   ┌─────────────┐             │
+│                           │  Localizer  │ → │ Recommender │             │
+│                           └─────────────┘   └─────────────┘             │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                          Final Results (JSON/gRPC)
 ```
 
 ---
 
-## 🔒 Security (mTLS)
+## 🔒 Security
 
+### mTLS (Service-to-Service)
 ```python
-# Server
+# Server loads certificates
 server_credentials = grpc.ssl_server_credentials(
     [(server_key, server_cert)],
     root_certificates=ca_cert,
     require_client_auth=True  # ✅ Enforced
 )
-
-# Certificates needed:
-/etc/synthos/certs/
-├── ca.crt         # CA certificate
-├── server.crt     # ML service cert
-├── server.key     # ML service private key
-└── client.crt     # Backend cert (for verification)
 ```
+
+### JWT Authentication (API Gateway)
+- Access tokens: 15 minutes expiry
+- Refresh tokens: 30 days expiry
+- bcrypt password hashing (cost 10)
 
 ---
 
 ## 🚨 Error Handling
-
-### Comprehensive Error Categories
 
 | Code | Category | Retryable | Example |
 |------|----------|-----------|---------|
@@ -231,164 +222,20 @@ server_credentials = grpc.ssl_server_credentials(
 | 4xxx | Timeout | ✅ | Operation too slow |
 | 5xxx | Internal | ❌ | Unexpected errors |
 
-### Error Response Format
-```protobuf
-message ErrorInfo {
-  int32 code = 1;
-  string message = 2;           // Human-readable
-  string details = 3;           // Stack trace
-  bool retryable = 4;           // ✅ Can retry
-  int32 retry_after_seconds = 5; // Wait time
-}
-```
-
 ---
 
-## 🎮 Progress Streaming (Every 10s)
+## 🧪 Testing Status
 
-```protobuf
-message CascadeProgress {
-  double progress_percent = 7;        // 0-100
-  double current_loss = 8;            // Real-time loss
-  map<int32, double> gpu_utilization = 9;  // % per GPU
-  string estimated_completion = 10;    // ISO timestamp
-  ModelResult result = 11;            // When model completes
-}
-```
+### ✅ Implemented
+- [x] Unit tests for CollapseDetector (13 tests)
+- [x] Unit tests for DiversityAnalyzer (14 tests)
+- [x] Integration tests for full pipeline (15 tests)
+- [x] Load testing framework
 
-**Update Frequency:** Every 10 seconds (async streaming)
-
----
-
-## 🧪 What's Implemented (Alpha Status)
-
-### ✅ Core Infrastructure
-- [x] Dataset loader (multiple formats supported)
-- [x] Module orchestration framework
-- [x] Basic error handling
-- [x] Configuration management
-- [x] Protocol buffer definitions
-
-### 🚧 In Active Development
-- [ ] Comprehensive unit tests (target: 70%+ coverage)
-- [ ] Integration test suite
-- [ ] Performance benchmarking framework
-- [ ] Production error handling (retries, circuit breakers)
-- [ ] Monitoring and observability
-- [ ] Security hardening
-
-### ❌ Not Yet Implemented
-- [ ] Load balancing
-- [ ] Auto-scaling
-- [ ] Production monitoring dashboards
-- [ ] Incident response procedures
-- [ ] Multi-node distributed training
-- [ ] Validated performance at billion-row scale
-
----
-
-## 🚀 Next Steps for ML Team
-
-### Immediate (Ready to Use)
-1. **Install dependencies**: `pip install -r requirements.txt`
-2. **Run example pipeline**: `python examples/complete_pipeline.py`
-3. **Test with real data**: Replace synthetic data with actual datasets
-4. **Start gRPC server**: `python src/grpc_services/validation_server.py`
-
-### Short-term (Weeks 2-4)
-1. **Integrate with backend**: Connect gRPC client from backend service
-2. **Test on real datasets** (100M+ rows from OpenAI/DeepMind scale)
-3. **Optimize GPU utilization** (monitor and tune for >80%)
-4. **Build production monitoring** (Prometheus/Grafana dashboards)
-
-### Medium-term (Months 2-3)
-1. **Scale testing** (500M+ row datasets, multi-node training)
-2. **Performance benchmarking** (latency, throughput, accuracy)
-3. **Production deployment** (Kubernetes, auto-scaling)
-4. **Continuous learning** (update signature library with real patterns)
-
----
-
-## 📞 Integration with Backend
-
-### What Backend Sends Us
-```python
-CascadeRequest(
-    dataset_id="ds_123",
-    validation_id="val_456",
-    sample_s3_path="s3://bucket/sample.parquet",
-    config=CascadeConfig(
-        target_architecture="resonance_nn",
-        vocab_size=50257
-    )
-)
-```
-
-### What We Stream Back (Every 10s)
-```python
-CascadeProgress(
-    models_completed=7,
-    models_total=18,
-    progress_percent=38.9,
-    current_loss=0.347,
-    gpu_utilization={0: 87.3, 1: 85.1, 2: 89.2, 3: 91.5},
-    estimated_completion="2025-11-02T14:30:00Z"
-)
-```
-
-### Final Response
-```python
-PredictionResponse(
-    predicted_accuracy=0.87,
-    confidence=ConfidenceInterval(0.84, 0.90, 0.95),
-    final_risk_score=23
-)
-
-CollapseResponse(
-    collapse_detected=False,
-    dimensions=[
-        DimensionScore("distribution_fidelity", 92, 70, True),
-        DimensionScore("correlation_preservation", 88, 70, True),
-        ...
-    ]
-)
-
-RecommendationResponse(
-    recommendations=[...],  # Prioritized fixes
-    combined_impact=Impact(62, 15, 47)  # 47-point improvement
-)
-```
-
----
-
-## 💡 Key Differentiators
-
-### 1. NO Attention Mechanism
-```python
-# ❌ Traditional transformer:
-attention = nn.MultiheadAttention(...)  # O(n²)
-
-# ✅ Our approach:
-spectral_layer = MultiHeadFrequencyLayer(...)  # O(n log n)
-# Uses HierarchicalFFT + AdvancedSpectralGating
-```
-
-### 2. FFT-Based Processing
-```python
-# Frequency domain processing instead of self-attention
-fft_output = torch.fft.rfft(inputs, dim=-1)
-spectral_gating = self.advanced_spectral_gating(fft_output)
-result = torch.fft.irfft(spectral_gating, n=inputs.size(-1))
-```
-
-### 3. Real-Time Streaming
-```python
-# Progress updates every 10 seconds automatically
-async def progress_callback(progress: CascadeProgress):
-    yield progress  # Streamed to backend
-
-# No polling needed!
-```
+### 🚧 In Progress
+- [ ] Increase test coverage (target: 70%+)
+- [ ] GPU-specific tests
+- [ ] Performance benchmarks at scale
 
 ---
 
@@ -398,7 +245,7 @@ async def progress_callback(progress: CascadeProgress):
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| Test Coverage | >70% | ~5% | 🚧 In Progress |
+| Test Coverage | >70% | ~30% | 🚧 In Progress |
 | Validation Accuracy | >90% | TBD | 🚧 Testing Needed |
 | Turnaround Time | <48h | TBD | 🚧 Benchmark Pending |
 | False Positives | <5% | TBD | 🚧 Testing Needed |
@@ -407,21 +254,24 @@ async def progress_callback(progress: CascadeProgress):
 
 ---
 
-## 📚 Documentation Files
+## 🚀 Deployment Options
 
-1. **README.md** - Complete guide (this file)
-2. **DISTRIBUTION_README.md** - Package distribution info
-3. **INSTALLATION_GUIDE.md** - Resonance NN installation
-4. **QUICK_REFERENCE.md** - Quick reference card
-5. **synthos-strategic-plan.md** - Overall product strategy
-6. **synthos-api-architecture.md** - Full API architecture
-7. **synthos-validation-method.md** - Validation methodology
+### Docker Compose (Development)
+```bash
+docker-compose up -d
+```
+
+### Kubernetes (Production)
+- Helm charts in `deployment/`
+- Auto-scaling based on GPU utilization
+
+### RunPod (GPU Cloud)
+- See `RUNPOD_DEPLOYMENT.md`
+- Supports A10G, A100, H100 GPUs
 
 ---
 
 **Status:** ✅ Core architecture implemented | 🚧 Testing and validation in progress | ❌ Not production-ready
-
-**Team:** ML Engineers + Backend Team
 
 **Version:** 0.1.0-alpha (Experimental)
 
@@ -429,4 +279,4 @@ async def progress_callback(progress: CascadeProgress):
 
 ---
 
-*Built with careful architecture and honest assessment | Last Updated: November 9, 2025*
+*Built with careful architecture and honest assessment | Last Updated: January 27, 2026*

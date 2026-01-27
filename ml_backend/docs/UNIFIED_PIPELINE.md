@@ -402,3 +402,7 @@ pip install packages/resonance_nn-0.1.0-py3-none-any.whl
 ---
 
 **Questions?** Check the main [README.md](README.md) or review `examples/` folder.
+
+---
+
+*Last Updated: January 27, 2026*

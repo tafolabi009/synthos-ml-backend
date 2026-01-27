@@ -253,7 +253,8 @@ class AdvancedRecommendationEngine:
         self.impact_predictor = ImpactPredictor().to(self.device)
         if model_path:
             try:
-                self.impact_predictor.load_state_dict(torch.load(model_path, map_location=self.device))
+                # SECURITY: weights_only=True prevents arbitrary code execution (CWE-502)
+                self.impact_predictor.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
                 logger.info(f"Loaded impact predictor from {model_path}")
             except Exception as e:
                 logger.warning(f"Could not load impact predictor: {e}")

@@ -1,0 +1,149 @@
+--- a/ml_backend/src/collapse_engine/detector.py
++++ b/ml_backend/src/collapse_engine/detector.py
+@@ -21,6 +21,17 @@ from scipy.spatial import distance
+ import logging
+ 
+ logger = logging.getLogger(__name__)
++
++# SynthOS CUDA Kernel Integration
++# Provides 2-5x speedup for spectral entropy computation
++try:
++    from synthos_kernel import SynthOSKernel
++    _SYNTHOS_AVAILABLE = True
++    logger.info("SynthOS kernel module available")
++except ImportError:
++    _SYNTHOS_AVAILABLE = False
++    logger.debug("SynthOS kernel not available, using PyTorch fallback")
++
+ 
+ 
+ @dataclass
+@@ -73,6 +84,22 @@ class CollapseDetector:
+     def __init__(self, config: Optional[CollapseConfig] = None):
+         self.config = config or CollapseConfig()
+         self.device = torch.device("cuda" if torch.cuda.is_available() and self.config.use_gpu else "cpu")
++        
++        # Initialize SynthOS kernel for accelerated spectral analysis
++        self._synthos_kernel = None
++        self._use_synthos = False
++        
++        if _SYNTHOS_AVAILABLE and self.device.type == 'cuda':
++            try:
++                self._synthos_kernel = SynthOSKernel()
++                self._use_synthos = True
++                logger.info(
++                    f"SynthOS kernel initialized: {self._synthos_kernel.active_arch} "
++                    f"(expected speedup: {self._synthos_kernel.get_performance_info()['expected_speedup']:.1f}x)"
++                )
++            except Exception as e:
++                logger.warning(f"SynthOS kernel initialization failed, using PyTorch: {e}")
++        
+         logger.info(f"CollapseDetector initialized on {self.device}")
+     
+     async def detect_collapse(
+@@ -623,6 +650,65 @@ class CollapseDetector:
+     # ==================== DIMENSION 6: SPECTRAL COHERENCE (FFT) ====================
+     
+     async def _analyze_spectral_coherence(
++        self, synthetic: np.ndarray, original: np.ndarray
++    ) -> DimensionScore:
++        """
++        FFT-based spectral analysis (perfectly aligned with Resonance NN architecture).
++        
++        This analysis naturally complements Resonance Neural Networks which operate
++        in the frequency domain using FFT. Collapse often manifests as:
++        - Loss of high-frequency components
++        - Abnormal spectral energy concentration
++        - Reduced spectral entropy (mode collapse in frequency space)
++        
++        OPTIMIZED: Uses SynthOS fused CUDA kernel when available for 2-5x speedup.
++        """
++        metrics = {}
++        
++        # Convert to torch for GPU FFT
++        if self.device.type == 'cuda':
++            synth_tensor = torch.tensor(synthetic, device=self.device, dtype=torch.float32)
++            orig_tensor = torch.tensor(original, device=self.device, dtype=torch.float32)
++        else:
++            synth_tensor = torch.tensor(synthetic, dtype=torch.float32)
++            orig_tensor = torch.tensor(original, dtype=torch.float32)
++        
++        # Compute FFT (real FFT for efficiency)
++        synth_fft = torch.fft.rfft(synth_tensor, dim=0)
++        orig_fft = torch.fft.rfft(orig_tensor, dim=0)
++        
++        # Power spectral density
++        synth_psd = torch.abs(synth_fft) ** 2
++        orig_psd = torch.abs(orig_fft) ** 2
++        
++        # 1. Spectral distance
++        spectral_dist = torch.mean(torch.abs(synth_psd - orig_psd)).item()
++        spectral_score = 100 * np.exp(-spectral_dist / 1000)
++        metrics['spectral_distance'] = spectral_dist
++        metrics['spectral_similarity'] = spectral_score
++        
++        # 2. Dominant frequency preservation
++        synth_dom_freq = torch.argmax(synth_psd, dim=0)
++        orig_dom_freq = torch.argmax(orig_psd, dim=0)
++        
++        freq_match = (synth_dom_freq == orig_dom_freq).float().mean().item()
++        metrics['dominant_frequency_match'] = freq_match * 100
++        
++        # 3. Spectral entropy - OPTIMIZED with SynthOS kernel
++        if self._use_synthos and self._is_valid_for_synthos(synth_tensor):
++            # Use fused CUDA kernel (single kernel launch vs 4-5 with PyTorch)
++            synth_spectral_entropy = self._synthos_kernel.compute_spectral_entropy(
++                synth_tensor
++            ).mean().item()
++            
++            orig_spectral_entropy = self._synthos_kernel.compute_spectral_entropy(
++                orig_tensor
++            ).mean().item()
++        else:
++            # Fallback to PyTorch implementation
++            synth_spectral_entropy = self._compute_spectral_entropy_pytorch(synth_psd)
++            orig_spectral_entropy = self._compute_spectral_entropy_pytorch(orig_psd)
++        
++        entropy_ratio = synth_spectral_entropy / (orig_spectral_entropy + 1e-10)
++        entropy_score = 100 * np.exp(-abs(entropy_ratio - 1))
++        
++        metrics['spectral_entropy_ratio'] = entropy_ratio
++        metrics['spectral_entropy_score'] = entropy_score
++        
++        # Combined score
++        score = (
++            metrics['spectral_similarity'] * 0.4 +
++            metrics['dominant_frequency_match'] * 0.3 +
++            metrics['spectral_entropy_score'] * 0.3
++        )
++        
++        passed = score >= self.config.spectral_coherence_threshold
++        severity = self._determine_severity(score, self.config.spectral_coherence_threshold)
++        
++        return DimensionScore(
++            name='Spectral Coherence',
++            score=score,
++            threshold=self.config.spectral_coherence_threshold,
++            passed=passed,
++            metrics=metrics,
++            severity=severity
++        )
++    
++    def _is_valid_for_synthos(self, tensor: torch.Tensor) -> bool:
++        """Check if tensor is valid for SynthOS kernel processing"""
++        if tensor.dim() != 2:
++            return False
++        n_samples = tensor.shape[0]
++        # Must be power of 2 and within range
++        if n_samples < 4 or n_samples > 8192:
++            return False
++        return (n_samples & (n_samples - 1)) == 0
++    
++    def _compute_spectral_entropy_pytorch(self, psd: torch.Tensor) -> float:
++        """Compute spectral entropy using PyTorch (fallback)"""
++        psd_norm = F.normalize(psd, p=1, dim=0)
++        entropy = -torch.sum(
++            psd_norm * torch.log(psd_norm + 1e-10),
++            dim=0
++        ).mean().item()
++        return entropy

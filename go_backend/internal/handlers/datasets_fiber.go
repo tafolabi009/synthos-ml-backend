@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"time"
 
@@ -11,12 +12,36 @@ import (
 	"github.com/google/uuid"
 	"github.com/tafolabi009/backend/go_backend/internal/models"
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
-	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/grpcclient"
 	"github.com/tafolabi009/backend/go_backend/pkg/storage"
+	validationpb "github.com/tafolabi009/backend/proto/validation"
 )
 
+// DatasetHandler holds dependencies for dataset handlers
+type DatasetHandler struct {
+	S3Client         *storage.S3Client
+	Repo             *repository.DatasetRepository
+	ValidationClient *grpcclient.ValidationClient
+}
+
+// NewDatasetHandler creates a new DatasetHandler with injected dependencies
+func NewDatasetHandler(s3Client *storage.S3Client, repo *repository.DatasetRepository, validationClient *grpcclient.ValidationClient) *DatasetHandler {
+	return &DatasetHandler{
+		S3Client:         s3Client,
+		Repo:             repo,
+		ValidationClient: validationClient,
+	}
+}
+
+func getS3Bucket() string {
+	if bucket := os.Getenv("S3_BUCKET"); bucket != "" {
+		return bucket
+	}
+	return "synthos-datasets-570116615008"
+}
+
 // InitiateUploadFiber starts a dataset upload and returns signed URL - Fiber version
-func InitiateUploadFiber(c *fiber.Ctx) error {
+func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
 	var req models.InitiateUploadRequest
@@ -38,26 +63,9 @@ func InitiateUploadFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	s3Config := storage.S3Config{
-		Region:          "us-east-1",
-		Bucket:          "synthos-uploads",
-		AccessKeyID:     "",
-		SecretAccessKey: "",
-	}
-
-	s3Client, err := storage.NewS3Client(ctx, s3Config)
-	if err != nil {
-		log.Printf("Failed to initialize S3 client: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fiber.Map{
-				"code":    "STORAGE_ERROR",
-				"message": "Failed to initialize storage service",
-			},
-		})
-	}
-
 	// Generate presigned URL for upload (valid for 1 hour)
-	uploadURL, err := s3Client.GeneratePresignedURL(ctx, s3Key, "PUT", time.Hour)
+	// Pass Content-Type to prevent AWS 403 signature mismatch errors
+	uploadURL, err := h.S3Client.GeneratePresignedURL(ctx, s3Key, "PUT", time.Hour, req.FileType)
 	if err != nil {
 		log.Printf("Failed to generate presigned URL: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -81,8 +89,7 @@ func InitiateUploadFiber(c *fiber.Ctx) error {
 		UploadedAt:  time.Now().UTC(),
 	}
 
-	datasetRepo := repository.NewDatasetRepository(database.GetDB())
-	if err := datasetRepo.Create(ctx, &dataset); err != nil {
+	if err := h.Repo.Create(ctx, &dataset); err != nil {
 		log.Printf("Failed to create dataset record: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -104,7 +111,7 @@ func InitiateUploadFiber(c *fiber.Ctx) error {
 }
 
 // CompleteUploadFiber marks an upload as complete and triggers processing - Fiber version
-func CompleteUploadFiber(c *fiber.Ctx) error {
+func (h *DatasetHandler) CompleteUploadFiber(c *fiber.Ctx) error {
 	datasetID := c.Params("id")
 	userID := c.Locals("user_id").(string)
 
@@ -122,8 +129,7 @@ func CompleteUploadFiber(c *fiber.Ctx) error {
 	defer cancel()
 
 	// Verify dataset belongs to user
-	datasetRepo := repository.NewDatasetRepository(database.GetDB())
-	dataset, err := datasetRepo.GetByID(ctx, datasetID)
+	dataset, err := h.Repo.GetByID(ctx, datasetID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -146,7 +152,7 @@ func CompleteUploadFiber(c *fiber.Ctx) error {
 	dataset.Status = "processing"
 	dataset.ProcessedAt = &[]time.Time{time.Now().UTC()}[0]
 
-	if err := datasetRepo.Update(ctx, dataset); err != nil {
+	if err := h.Repo.Update(ctx, dataset); err != nil {
 		log.Printf("Failed to update dataset status: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -154,6 +160,38 @@ func CompleteUploadFiber(c *fiber.Ctx) error {
 				"message": "Failed to update dataset status",
 			},
 		})
+	}
+
+	// Trigger ML backend via gRPC - this fixes the "Ghost Job" bug
+	if h.ValidationClient != nil {
+		go func() {
+			// Use a separate context for the async gRPC call
+			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer grpcCancel()
+
+			// Create cascade config with defaults
+			cascadeConfig := &validationpb.CascadeConfig{
+				NumEpochs:               10,
+				BatchSize:               32,
+				LearningRate:            0.001,
+				EarlyStoppingPatience:   3,
+				ValidationSplit:         0.2,
+				Tiers:                   []string{"light", "medium", "heavy"},
+				EnableSpectralAnalysis:  true,
+				EnableFrequencyAnalysis: true,
+			}
+
+			// Trigger cascade training on the ML backend
+			_, err := h.ValidationClient.TrainCascade(grpcCtx, datasetID, dataset.S3Path, cascadeConfig)
+			if err != nil {
+				// Log the error but don't fail the request since data is already saved
+				log.Printf("⚠️ Failed to trigger ML backend for dataset %s: %v", datasetID, err)
+			} else {
+				log.Printf("✅ Successfully triggered ML backend for dataset %s", datasetID)
+			}
+		}()
+	} else {
+		log.Printf("⚠️ ValidationClient not available, skipping ML backend trigger for dataset %s", datasetID)
 	}
 
 	response := models.CompleteUploadResponse{
@@ -170,7 +208,7 @@ func CompleteUploadFiber(c *fiber.Ctx) error {
 }
 
 // ListDatasetsFiber returns paginated list of datasets - Fiber version
-func ListDatasetsFiber(c *fiber.Ctx) error {
+func (h *DatasetHandler) ListDatasetsFiber(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -188,8 +226,7 @@ func ListDatasetsFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	datasetRepo := repository.NewDatasetRepository(database.GetDB())
-	datasets, totalCount, err := datasetRepo.List(ctx, userID, page, pageSize)
+	datasets, totalCount, err := h.Repo.List(ctx, userID, page, pageSize)
 	if err != nil {
 		log.Printf("Failed to list datasets: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -227,15 +264,14 @@ func ListDatasetsFiber(c *fiber.Ctx) error {
 }
 
 // GetDatasetFiber returns details for a specific dataset - Fiber version
-func GetDatasetFiber(c *fiber.Ctx) error {
+func (h *DatasetHandler) GetDatasetFiber(c *fiber.Ctx) error {
 	datasetID := c.Params("id")
 	userID := c.Locals("user_id").(string)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	datasetRepo := repository.NewDatasetRepository(database.GetDB())
-	dataset, err := datasetRepo.GetByID(ctx, datasetID)
+	dataset, err := h.Repo.GetByID(ctx, datasetID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -258,16 +294,14 @@ func GetDatasetFiber(c *fiber.Ctx) error {
 }
 
 // DeleteDatasetFiber removes a dataset - Fiber version
-func DeleteDatasetFiber(c *fiber.Ctx) error {
+func (h *DatasetHandler) DeleteDatasetFiber(c *fiber.Ctx) error {
 	datasetID := c.Params("id")
 	userID := c.Locals("user_id").(string)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	datasetRepo := repository.NewDatasetRepository(database.GetDB())
-
-	dataset, err := datasetRepo.GetByID(ctx, datasetID)
+	dataset, err := h.Repo.GetByID(ctx, datasetID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -288,24 +322,13 @@ func DeleteDatasetFiber(c *fiber.Ctx) error {
 
 	// Delete from S3 if S3 path exists
 	if dataset.S3Path != "" {
-		s3Config := storage.S3Config{
-			Region:          "us-east-1",
-			Bucket:          "synthos-uploads",
-			AccessKeyID:     "",
-			SecretAccessKey: "",
-		}
-
-		s3Client, err := storage.NewS3Client(ctx, s3Config)
-		if err != nil {
-			log.Printf("Failed to initialize S3 client for deletion: %v", err)
-		} else {
-			if err := s3Client.Delete(ctx, dataset.S3Path); err != nil {
-				log.Printf("Failed to delete file from S3: %v", err)
-			}
+		if err := h.S3Client.Delete(ctx, dataset.S3Path); err != nil {
+			log.Printf("Failed to delete file from S3: %v", err)
+			// Continue with database deletion even if S3 delete fails
 		}
 	}
 
-	if err := datasetRepo.Delete(ctx, datasetID); err != nil {
+	if err := h.Repo.Delete(ctx, datasetID); err != nil {
 		log.Printf("Failed to delete dataset from database: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{

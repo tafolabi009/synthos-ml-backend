@@ -125,8 +125,8 @@ class GPUOptimizer:
             try:
                 model = model.to(memory_format=torch.channels_last)
                 logger.info("Converted model to channels_last memory format")
-            except:
-                pass  # Not all models support this
+            except (RuntimeError, TypeError) as e:
+                logger.debug(f"Channels last not supported: {e}")  # Not all models support this
         
         # 3. Compile model with PyTorch 2.0+ (if available)
         if self.config.compile_model and hasattr(torch, 'compile'):

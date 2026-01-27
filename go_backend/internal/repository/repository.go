@@ -20,8 +20,8 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 // Create creates a new user
 func (r *UserRepository) Create(ctx context.Context, user *models.User) error {
 	query := `
-		INSERT INTO users (id, email, username, password_hash, full_name, company_id, company_name, role, subscription_tier, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO users (id, email, username, password_hash, full_name, company_id, company_name, job_title, phone, role, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at
 	`
 
@@ -33,8 +33,9 @@ func (r *UserRepository) Create(ctx context.Context, user *models.User) error {
 		user.FullName,
 		user.CompanyID,
 		user.CompanyName,
+		user.JobTitle,
+		user.Phone,
 		user.Role,
-		user.SubscriptionTier,
 		true, // is_active defaults to true
 	).Scan(&user.CreatedAt, &user.UpdatedAt)
 
@@ -49,7 +50,7 @@ func (r *UserRepository) Create(ctx context.Context, user *models.User) error {
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	query := `
 		SELECT id, email, username, password_hash, full_name, company_id, company_name, 
-		       role, subscription_tier, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
+		       job_title, phone, role, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
 		       failed_login_attempts, locked_until, is_active, last_login_at, created_at, updated_at
 		FROM users
 		WHERE email = $1
@@ -64,8 +65,9 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 		&user.FullName,
 		&user.CompanyID,
 		&user.CompanyName,
+		&user.JobTitle,
+		&user.Phone,
 		&user.Role,
-		&user.SubscriptionTier,
 		&user.TwoFactorEnabled,
 		&user.TwoFactorSecret,
 		&user.TwoFactorBackupCodes,
@@ -88,7 +90,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 func (r *UserRepository) GetByID(ctx context.Context, userID string) (*models.User, error) {
 	query := `
 		SELECT id, email, username, password_hash, full_name, company_id, company_name,
-		       role, subscription_tier, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
+		       job_title, phone, role, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
 		       failed_login_attempts, locked_until, is_active, last_login_at, created_at, updated_at
 		FROM users
 		WHERE id = $1
@@ -103,8 +105,9 @@ func (r *UserRepository) GetByID(ctx context.Context, userID string) (*models.Us
 		&user.FullName,
 		&user.CompanyID,
 		&user.CompanyName,
+		&user.JobTitle,
+		&user.Phone,
 		&user.Role,
-		&user.SubscriptionTier,
 		&user.TwoFactorEnabled,
 		&user.TwoFactorSecret,
 		&user.TwoFactorBackupCodes,
@@ -127,7 +130,7 @@ func (r *UserRepository) GetByID(ctx context.Context, userID string) (*models.Us
 func (r *UserRepository) Update(ctx context.Context, user *models.User) error {
 	query := `
 		UPDATE users
-		SET full_name = $2, company_name = $3, subscription_tier = $4, updated_at = CURRENT_TIMESTAMP
+		SET full_name = $2, username = $3, company_name = $4, job_title = $5, phone = $6, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $1
 		RETURNING updated_at
 	`
@@ -135,8 +138,10 @@ func (r *UserRepository) Update(ctx context.Context, user *models.User) error {
 	err := r.db.QueryRow(ctx, query,
 		user.ID,
 		user.FullName,
+		user.Username,
 		user.CompanyName,
-		user.SubscriptionTier,
+		user.JobTitle,
+		user.Phone,
 	).Scan(&user.UpdatedAt)
 
 	if err != nil {
