@@ -26,11 +26,17 @@
 #include <cooperative_groups.h>
 #include <math_constants.h>
 
-/* Hopper-specific headers (CUDA 12+) */
-#if __CUDACC_VER_MAJOR__ >= 12 && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-    #include <cuda/barrier>
-    #include <cuda/cluster_group>
-    #define SYNTHOS_HAS_HOPPER_FEATURES 1
+/* Hopper-specific headers (CUDA 12.3+) */
+#if defined(__CUDACC_VER_MAJOR__) && __CUDACC_VER_MAJOR__ >= 12 && __CUDACC_VER_MINOR__ >= 3
+    #if __has_include(<cuda/barrier>)
+        #include <cuda/barrier>
+    #endif
+    #if __has_include(<cuda/cluster_group>)
+        #include <cuda/cluster_group>
+        #define SYNTHOS_HAS_HOPPER_FEATURES 1
+    #else
+        #define SYNTHOS_HAS_HOPPER_FEATURES 0
+    #endif
 #else
     #define SYNTHOS_HAS_HOPPER_FEATURES 0
 #endif
