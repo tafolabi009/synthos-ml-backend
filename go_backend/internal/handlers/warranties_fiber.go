@@ -113,7 +113,9 @@ func ListWarrantiesFiber(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size", "20"))
 
-	ctx := context.Background()
+	// Use timeout context to prevent indefinite hangs on database operations
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	warrantyRepo := repository.NewWarrantyRepository(database.GetDB())
 
 	warranties, totalCount, err := warrantyRepo.List(ctx, userID, page, pageSize)
@@ -144,7 +146,9 @@ func GetWarrantyFiber(c *fiber.Ctx) error {
 	warrantyID := c.Params("id")
 	userID := c.Locals("user_id").(string)
 
-	ctx := context.Background()
+	// Use timeout context to prevent indefinite hangs on database operations
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	warrantyRepo := repository.NewWarrantyRepository(database.GetDB())
 
 	warranty, err := warrantyRepo.GetByID(ctx, warrantyID)
@@ -189,7 +193,9 @@ func FileWarrantyClaimFiber(c *fiber.Ctx) error {
 		})
 	}
 
-	ctx := context.Background()
+	// Use timeout context to prevent indefinite hangs on database operations
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	warrantyRepo := repository.NewWarrantyRepository(database.GetDB())
 
 	warranty, err := warrantyRepo.GetByID(ctx, warrantyID)

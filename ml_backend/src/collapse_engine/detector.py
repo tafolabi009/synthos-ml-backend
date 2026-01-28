@@ -13,12 +13,23 @@ Features:
 - Real-time collapse detection during training
 - Historical pattern matching
 - Predictive collapse warnings
+
+Batch Size Limits:
+- CPU: Recommended max 50,000 samples per batch
+- GPU (8GB VRAM): Recommended max 100,000 samples per batch  
+- GPU (16GB+ VRAM): Recommended max 500,000 samples per batch
+- GPU (80GB A100): Recommended max 2,000,000 samples per batch
+
+Memory Usage Estimation:
+- ~8 bytes per float32 element
+- Each sample with 512 dimensions = 4KB
+- 100K samples = ~400MB base memory (plus 3-5x for intermediate computations)
 """
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 from scipy import stats
 from scipy.spatial import distance
@@ -26,6 +37,137 @@ import logging
 import gc
 
 logger = logging.getLogger(__name__)
+
+
+class CUDAOutOfMemoryError(RuntimeError):
+    """Raised when CUDA runs out of memory during collapse detection."""
+    def __init__(self, message: str, batch_size: int, suggested_batch_size: int):
+        self.batch_size = batch_size
+        self.suggested_batch_size = suggested_batch_size
+        super().__init__(f"{message}. Current batch size: {batch_size}. Try reducing to: {suggested_batch_size}")
+
+
+class InvalidInputError(ValueError):
+    """Raised when input data contains invalid values (NaN, Inf, or wrong shape)."""
+    def __init__(self, message: str, field: str, details: Optional[Dict] = None):
+        self.field = field
+        self.details = details or {}
+        super().__init__(f"{message} in '{field}': {details}")
+
+
+def validate_tensor_input(
+    data: Union[np.ndarray, torch.Tensor],
+    name: str,
+    allow_empty: bool = False,
+    min_samples: int = 2,
+    min_features: int = 1,
+    max_samples: Optional[int] = None
+) -> np.ndarray:
+    """
+    Validate input tensor for NaN, Inf, shape, and type issues.
+    
+    Args:
+        data: Input tensor or array
+        name: Name for error messages
+        allow_empty: Whether to allow empty arrays
+        min_samples: Minimum number of samples required
+        min_features: Minimum number of features required
+        max_samples: Maximum samples allowed (for memory safety)
+    
+    Returns:
+        Validated numpy array
+        
+    Raises:
+        InvalidInputError: If validation fails
+    """
+    # Convert to numpy if needed
+    if isinstance(data, torch.Tensor):
+        data = data.detach().cpu().numpy()
+    elif not isinstance(data, np.ndarray):
+        try:
+            data = np.array(data)
+        except Exception as e:
+            raise InvalidInputError(
+                f"Cannot convert to numpy array",
+                name,
+                {"type": type(data).__name__, "error": str(e)}
+            )
+    
+    # Check empty
+    if data.size == 0:
+        if not allow_empty:
+            raise InvalidInputError(
+                "Data cannot be empty",
+                name,
+                {"shape": data.shape, "size": data.size}
+            )
+        return data
+    
+    # Check for NaN
+    nan_count = np.isnan(data).sum()
+    if nan_count > 0:
+        nan_ratio = nan_count / data.size
+        if nan_ratio > 0.5:  # More than 50% NaN is likely an error
+            raise InvalidInputError(
+                f"Data contains too many NaN values ({nan_ratio:.1%})",
+                name,
+                {"nan_count": int(nan_count), "total": data.size, "nan_ratio": float(nan_ratio)}
+            )
+        logger.warning(f"{name}: Contains {nan_count} NaN values ({nan_ratio:.1%}), will be replaced with 0")
+    
+    # Check for Inf
+    inf_count = np.isinf(data).sum()
+    if inf_count > 0:
+        inf_ratio = inf_count / data.size
+        if inf_ratio > 0.1:  # More than 10% Inf is likely an error
+            raise InvalidInputError(
+                f"Data contains too many Inf values ({inf_ratio:.1%})",
+                name,
+                {"inf_count": int(inf_count), "total": data.size, "inf_ratio": float(inf_ratio)}
+            )
+        logger.warning(f"{name}: Contains {inf_count} Inf values ({inf_ratio:.1%}), will be clipped")
+    
+    # Check shape (must be 2D)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+        logger.warning(f"{name}: 1D array reshaped to ({data.shape[0]}, 1)")
+    elif data.ndim != 2:
+        raise InvalidInputError(
+            "Data must be 2D (samples x features)",
+            name,
+            {"ndim": data.ndim, "shape": data.shape}
+        )
+    
+    n_samples, n_features = data.shape
+    
+    # Check minimum samples
+    if n_samples < min_samples:
+        raise InvalidInputError(
+            f"Insufficient samples (need at least {min_samples})",
+            name,
+            {"n_samples": n_samples, "min_required": min_samples}
+        )
+    
+    # Check minimum features
+    if n_features < min_features:
+        raise InvalidInputError(
+            f"Insufficient features (need at least {min_features})",
+            name,
+            {"n_features": n_features, "min_required": min_features}
+        )
+    
+    # Check maximum samples (memory safety)
+    if max_samples is not None and n_samples > max_samples:
+        raise InvalidInputError(
+            f"Too many samples (max allowed: {max_samples})",
+            name,
+            {"n_samples": n_samples, "max_allowed": max_samples}
+        )
+    
+    # Clean data: replace NaN with 0, clip Inf
+    data = np.nan_to_num(data, nan=0.0, posinf=1e10, neginf=-1e10)
+    
+    return data
 
 
 def cleanup_gpu_memory():
@@ -71,7 +213,26 @@ class DimensionScore:
 
 @dataclass
 class CollapseConfig:
-    """Configuration for collapse detection"""
+    """
+    Configuration for collapse detection.
+    
+    Attributes:
+        distribution_fidelity_threshold: Min score for distribution fidelity (0-100)
+        correlation_preservation_threshold: Min score for correlation preservation (0-100)
+        entropy_stability_threshold: Min score for entropy stability (0-100)
+        gradient_health_threshold: Min score for gradient health (0-100)
+        loss_landscape_threshold: Min score for loss landscape (0-100)
+        spectral_coherence_threshold: Min score for spectral coherence (0-100)
+        generalization_gap_threshold: Min score for generalization gap (0-100)
+        statistical_consistency_threshold: Min score for statistical consistency (0-100)
+        overall_threshold: Average dimension score below which collapse is detected
+        use_gpu: Whether to use GPU acceleration
+        batch_size: Maximum samples per processing batch (memory management)
+        max_samples: Hard limit on input samples (prevents OOM). Set based on available memory:
+            - 8GB VRAM: 100,000 samples
+            - 16GB VRAM: 250,000 samples  
+            - 80GB VRAM (A100): 2,000,000 samples
+    """
     # Thresholds for each dimension (scores below = collapse)
     distribution_fidelity_threshold: float = 70.0
     correlation_preservation_threshold: float = 70.0
@@ -88,6 +249,10 @@ class CollapseConfig:
     # GPU settings
     use_gpu: bool = True
     batch_size: int = 10000
+    
+    # Memory safety limits
+    max_samples: int = 500000  # Safe default for 16GB VRAM
+    max_features: int = 10000  # Reasonable feature limit
 
 
 class CollapseDetector:
@@ -128,25 +293,37 @@ class CollapseDetector:
         Comprehensive collapse detection across 8 dimensions.
         
         Args:
-            synthetic_data: Generated synthetic data
-            original_data: Original training data
+            synthetic_data: Generated synthetic data (2D: samples x features)
+            original_data: Original training data (2D: samples x features)
             model_gradients: Model gradients during training (optional)
             training_metrics: Training loss/accuracy curves (optional)
         
         Returns:
             CollapseScore with detailed dimension analysis
+            
+        Raises:
+            InvalidInputError: If input data contains too many NaN/Inf values or has wrong shape
+            CUDAOutOfMemoryError: If GPU runs out of memory (includes suggested batch size)
+            
+        Memory Limits:
+            - Default max_samples: 500,000 (configurable via CollapseConfig)
+            - Reduce batch_size in config if hitting OOM errors
         """
         logger.info("Starting multi-dimensional collapse detection...")
         
-        # Convert PyTorch tensors to numpy if needed
-        if isinstance(synthetic_data, torch.Tensor):
-            synthetic_data = synthetic_data.detach().cpu().numpy()
-        if isinstance(original_data, torch.Tensor):
-            original_data = original_data.detach().cpu().numpy()
-        
-        # Handle empty data
-        if synthetic_data.size == 0 or original_data.size == 0:
-            raise ValueError("Input data cannot be empty")
+        # Validate and clean inputs
+        synthetic_data = validate_tensor_input(
+            synthetic_data,
+            "synthetic_data",
+            min_samples=2,
+            max_samples=self.config.max_samples
+        )
+        original_data = validate_tensor_input(
+            original_data,
+            "original_data",
+            min_samples=2,
+            max_samples=self.config.max_samples
+        )
             
         # Handle dimension mismatch (trim to common dimensions)
         min_dims = min(synthetic_data.shape[1], original_data.shape[1])
@@ -154,63 +331,83 @@ class CollapseDetector:
             logger.warning(f"Dimension mismatch: {synthetic_data.shape[1]} vs {original_data.shape[1]}. Trimming to {min_dims}.")
             synthetic_data = synthetic_data[:, :min_dims]
             original_data = original_data[:, :min_dims]
-            
-        # Handle NaNs (replace with 0)
-        synthetic_data = np.nan_to_num(synthetic_data)
-        original_data = np.nan_to_num(original_data)
         
         dimensions = {}
         warnings = []
         
-        # Dimension 1: Distribution Fidelity
-        logger.info("Analyzing distribution fidelity...")
-        dimensions['distribution_fidelity'] = await self._analyze_distribution_fidelity(
-            synthetic_data, original_data
-        )
+        try:
+            # Dimension 1: Distribution Fidelity
+            logger.info("Analyzing distribution fidelity...")
+            dimensions['distribution_fidelity'] = await self._analyze_distribution_fidelity(
+                synthetic_data, original_data
+            )
+            
+            # Dimension 2: Correlation Preservation
+            logger.info("Analyzing correlation preservation...")
+            dimensions['correlation_preservation'] = await self._analyze_correlation_preservation(
+                synthetic_data, original_data
+            )
         
-        # Dimension 2: Correlation Preservation
-        logger.info("Analyzing correlation preservation...")
-        dimensions['correlation_preservation'] = await self._analyze_correlation_preservation(
-            synthetic_data, original_data
-        )
-        
-        # Dimension 3: Entropy Stability
-        logger.info("Analyzing entropy stability...")
-        dimensions['entropy_stability'] = await self._analyze_entropy_stability(
-            synthetic_data, original_data
-        )
-        
-        # Dimension 4: Gradient Health (if available)
-        if model_gradients:
-            logger.info("Analyzing gradient health...")
-            dimensions['gradient_health'] = await self._analyze_gradient_health(model_gradients)
-        else:
-            dimensions['gradient_health'] = self._create_neutral_dimension('gradient_health')
-        
-        # Dimension 5: Loss Landscape (if available)
-        if training_metrics:
-            logger.info("Analyzing loss landscape...")
-            dimensions['loss_landscape'] = await self._analyze_loss_landscape(training_metrics)
-        else:
-            dimensions['loss_landscape'] = self._create_neutral_dimension('loss_landscape')
-        
-        # Dimension 6: Spectral Coherence (FFT-based)
-        logger.info("Analyzing spectral coherence...")
-        dimensions['spectral_coherence'] = await self._analyze_spectral_coherence(
-            synthetic_data, original_data
-        )
-        
-        # Dimension 7: Generalization Gap
-        logger.info("Analyzing generalization gap...")
-        dimensions['generalization_gap'] = await self._analyze_generalization_gap(
-            synthetic_data, original_data
-        )
-        
-        # Dimension 8: Statistical Consistency
-        logger.info("Analyzing statistical consistency...")
-        dimensions['statistical_consistency'] = await self._analyze_statistical_consistency(
-            synthetic_data, original_data
-        )
+            # Dimension 3: Entropy Stability
+            logger.info("Analyzing entropy stability...")
+            dimensions['entropy_stability'] = await self._analyze_entropy_stability(
+                synthetic_data, original_data
+            )
+            
+            # Dimension 4: Gradient Health (if available)
+            if model_gradients:
+                logger.info("Analyzing gradient health...")
+                dimensions['gradient_health'] = await self._analyze_gradient_health(model_gradients)
+            else:
+                dimensions['gradient_health'] = self._create_neutral_dimension('gradient_health')
+            
+            # Dimension 5: Loss Landscape (if available)
+            if training_metrics:
+                logger.info("Analyzing loss landscape...")
+                dimensions['loss_landscape'] = await self._analyze_loss_landscape(training_metrics)
+            else:
+                dimensions['loss_landscape'] = self._create_neutral_dimension('loss_landscape')
+            
+            # Dimension 6: Spectral Coherence (FFT-based)
+            logger.info("Analyzing spectral coherence...")
+            dimensions['spectral_coherence'] = await self._analyze_spectral_coherence(
+                synthetic_data, original_data
+            )
+            
+            # Dimension 7: Generalization Gap
+            logger.info("Analyzing generalization gap...")
+            dimensions['generalization_gap'] = await self._analyze_generalization_gap(
+                synthetic_data, original_data
+            )
+            
+            # Dimension 8: Statistical Consistency
+            logger.info("Analyzing statistical consistency...")
+            dimensions['statistical_consistency'] = await self._analyze_statistical_consistency(
+                synthetic_data, original_data
+            )
+            
+        except torch.cuda.OutOfMemoryError as e:
+            # Handle CUDA OOM with helpful error
+            cleanup_gpu_memory()
+            current_samples = synthetic_data.shape[0]
+            suggested_samples = current_samples // 2
+            logger.error(f"CUDA OOM during collapse detection. Samples: {current_samples}")
+            raise CUDAOutOfMemoryError(
+                "GPU ran out of memory during collapse detection",
+                batch_size=current_samples,
+                suggested_batch_size=suggested_samples
+            ) from e
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                cleanup_gpu_memory()
+                current_samples = synthetic_data.shape[0]
+                suggested_samples = current_samples // 2
+                raise CUDAOutOfMemoryError(
+                    "GPU ran out of memory during collapse detection",
+                    batch_size=current_samples,
+                    suggested_batch_size=suggested_samples
+                ) from e
+            raise
         
         # Compute overall score
         overall_score = self._compute_overall_score(dimensions)
@@ -733,13 +930,21 @@ class CollapseDetector:
             ).mean().item()
         else:
             # Fallback to PyTorch implementation
+            # OPTIMIZATION: Cache normalized PSDs to avoid redundant computation
+            # Previous code called F.normalize twice per PSD (2x performance hit)
+            synth_psd_norm = F.normalize(synth_psd, p=1, dim=0)
+            orig_psd_norm = F.normalize(orig_psd, p=1, dim=0)
+            
+            # Use small epsilon for numerical stability (1e-10 can underflow in log)
+            eps = 1e-8
+            
             synth_spectral_entropy = -torch.sum(
-                F.normalize(synth_psd, p=1, dim=0) * torch.log(F.normalize(synth_psd, p=1, dim=0) + 1e-10),
+                synth_psd_norm * torch.log(synth_psd_norm + eps),
                 dim=0
             ).mean().item()
             
             orig_spectral_entropy = -torch.sum(
-                F.normalize(orig_psd, p=1, dim=0) * torch.log(F.normalize(orig_psd, p=1, dim=0) + 1e-10),
+                orig_psd_norm * torch.log(orig_psd_norm + eps),
                 dim=0
             ).mean().item()
         

@@ -1,6 +1,15 @@
 """Collapse Engine - Phase 5-6: Collapse detection and localization"""
 
-from .detector import CollapseDetector, CollapseScore, DimensionScore, CollapseConfig
+from .detector import (
+    CollapseDetector, 
+    CollapseScore, 
+    DimensionScore, 
+    CollapseConfig,
+    CUDAOutOfMemoryError,
+    InvalidInputError,
+    validate_tensor_input,
+    cleanup_gpu_memory
+)
 from .signature_library import (
     AdvancedSignatureLibrary as SignatureLibrary,  # Use advanced version as default
     AdvancedSignatureLibrary,  # Export both names

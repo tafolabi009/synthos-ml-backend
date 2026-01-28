@@ -13,18 +13,134 @@ Features:
 - Real-time collapse detection during training
 - Historical pattern matching
 - Predictive collapse warnings
+
+Batch Size Limits:
+- CPU: Recommended max 50,000 samples per batch
+- GPU (8GB VRAM): Recommended max 100,000 samples per batch  
+- GPU (16GB+ VRAM): Recommended max 500,000 samples per batch
+- GPU (80GB A100): Recommended max 2,000,000 samples per batch
 """
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 from scipy import stats
 from scipy.spatial import distance
 import logging
+import gc
 
 logger = logging.getLogger(__name__)
+
+
+class CUDAOutOfMemoryError(RuntimeError):
+    """Raised when CUDA runs out of memory during collapse detection."""
+    def __init__(self, message: str, batch_size: int, suggested_batch_size: int):
+        self.batch_size = batch_size
+        self.suggested_batch_size = suggested_batch_size
+        super().__init__(f"{message}. Current batch size: {batch_size}. Try reducing to: {suggested_batch_size}")
+
+
+class InvalidInputError(ValueError):
+    """Raised when input data contains invalid values (NaN, Inf, or wrong shape)."""
+    def __init__(self, message: str, field: str, details: Optional[Dict] = None):
+        self.field = field
+        self.details = details or {}
+        super().__init__(f"{message} in '{field}': {details}")
+
+
+def validate_tensor_input(
+    data: Union[np.ndarray, torch.Tensor],
+    name: str,
+    allow_empty: bool = False,
+    min_samples: int = 2,
+    max_samples: Optional[int] = None
+) -> np.ndarray:
+    """
+    Validate input tensor for NaN, Inf, shape, and type issues.
+    
+    Args:
+        data: Input tensor or array
+        name: Name for error messages
+        allow_empty: Whether to allow empty arrays
+        min_samples: Minimum number of samples required
+        max_samples: Maximum samples allowed (for memory safety)
+    
+    Returns:
+        Validated numpy array
+        
+    Raises:
+        InvalidInputError: If validation fails
+    """
+    # Convert to numpy if needed
+    if isinstance(data, torch.Tensor):
+        data = data.detach().cpu().numpy()
+    elif not isinstance(data, np.ndarray):
+        try:
+            data = np.array(data)
+        except Exception as e:
+            raise InvalidInputError(
+                f"Cannot convert to numpy array",
+                name,
+                {"type": type(data).__name__, "error": str(e)}
+            )
+    
+    # Check empty
+    if data.size == 0:
+        if not allow_empty:
+            raise InvalidInputError("Data cannot be empty", name, {"shape": data.shape})
+        return data
+    
+    # Check for NaN
+    nan_count = np.isnan(data).sum()
+    if nan_count > 0:
+        nan_ratio = nan_count / data.size
+        if nan_ratio > 0.5:
+            raise InvalidInputError(
+                f"Data contains too many NaN values ({nan_ratio:.1%})",
+                name,
+                {"nan_count": int(nan_count), "nan_ratio": float(nan_ratio)}
+            )
+        logger.warning(f"{name}: Contains {nan_count} NaN values, will be replaced with 0")
+    
+    # Check for Inf
+    inf_count = np.isinf(data).sum()
+    if inf_count > 0:
+        inf_ratio = inf_count / data.size
+        if inf_ratio > 0.1:
+            raise InvalidInputError(
+                f"Data contains too many Inf values ({inf_ratio:.1%})",
+                name,
+                {"inf_count": int(inf_count), "inf_ratio": float(inf_ratio)}
+            )
+        logger.warning(f"{name}: Contains {inf_count} Inf values, will be clipped")
+    
+    # Check shape (must be 2D)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+    elif data.ndim != 2:
+        raise InvalidInputError("Data must be 2D", name, {"ndim": data.ndim, "shape": data.shape})
+    
+    n_samples = data.shape[0]
+    
+    if n_samples < min_samples:
+        raise InvalidInputError(f"Need at least {min_samples} samples", name, {"n_samples": n_samples})
+    
+    if max_samples is not None and n_samples > max_samples:
+        raise InvalidInputError(f"Too many samples (max: {max_samples})", name, {"n_samples": n_samples})
+    
+    # Clean data
+    data = np.nan_to_num(data, nan=0.0, posinf=1e10, neginf=-1e10)
+    return data
+
+
+def cleanup_gpu_memory():
+    """Force GPU memory cleanup to prevent OOM"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    gc.collect()
 
 
 @dataclass
@@ -636,13 +752,20 @@ class CollapseDetector:
         metrics['dominant_frequency_match'] = freq_match * 100
         
         # 3. Spectral entropy
+        # OPTIMIZATION: Cache normalized PSDs to avoid redundant computation
+        synth_psd_norm = F.normalize(synth_psd, p=1, dim=0)
+        orig_psd_norm = F.normalize(orig_psd, p=1, dim=0)
+        
+        # Use small epsilon for numerical stability
+        eps = 1e-8
+        
         synth_spectral_entropy = -torch.sum(
-            F.normalize(synth_psd, p=1, dim=0) * torch.log(F.normalize(synth_psd, p=1, dim=0) + 1e-10),
+            synth_psd_norm * torch.log(synth_psd_norm + eps),
             dim=0
         ).mean().item()
         
         orig_spectral_entropy = -torch.sum(
-            F.normalize(orig_psd, p=1, dim=0) * torch.log(F.normalize(orig_psd, p=1, dim=0) + 1e-10),
+            orig_psd_norm * torch.log(orig_psd_norm + eps),
             dim=0
         ).mean().item()
         
