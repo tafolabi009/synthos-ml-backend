@@ -1,0 +1,34 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Pull existing image
+        docker pull us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:latest
+
+        # Create patch Dockerfile
+        cat > /tmp/Dockerfile.patch << 'DOCKERFILE'
+        FROM us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:latest
+        USER root
+        RUN mkdir -p /data/signatures /tmp/signatures /models /cache && \
+            chown -R synthos:synthos /data /tmp/signatures /models /cache
+        # Patch signature_library.py to use env var
+        RUN sed -i 's|storage_path: str = "/workspaces/ml_backend/data/signatures"|storage_path: str = os.environ.get("SIGNATURE_DB_PATH", "/data/signatures")|' /app/src/collapse_engine/signature_library.py && \
+            sed -i 's|storage_path: str = "/workspaces/ml_backend/data/signatures"|storage_path: str = os.environ.get("SIGNATURE_DB_PATH", "/data/signatures")|' /app/src/collapse_engine/signature_library_advanced.py && \
+            sed -i '1s/^/import os\n/' /app/src/collapse_engine/signature_library.py 2>/dev/null; true && \
+            grep -q "^import os" /app/src/collapse_engine/signature_library.py || sed -i '/^import hashlib/a import os' /app/src/collapse_engine/signature_library.py && \
+            grep -q "^import os" /app/src/collapse_engine/signature_library_advanced.py || sed -i '/^import hashlib/a import os' /app/src/collapse_engine/signature_library_advanced.py
+        USER synthos
+        DOCKERFILE
+
+        # Replace PROJECT_ID placeholder
+        sed -i "s|\${PROJECT_ID}|${PROJECT_ID}|g" /tmp/Dockerfile.patch
+
+        # Build patched image
+        docker build -t us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:latest -t us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:patched -f /tmp/Dockerfile.patch /tmp
+
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:latest'
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/ml-backend:patched'
+timeout: '600s'

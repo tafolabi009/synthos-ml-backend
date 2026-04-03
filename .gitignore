@@ -1,0 +1,88 @@
+# Go backend binaries
+go_backend/api
+go_backend/*.exe
+go_backend/*.dll
+go_backend/*.so
+go_backend/*.dylib
+
+# Go test coverage
+go_backend/coverage.out
+go_backend/coverage.html
+
+# Python
+ml_backend/__pycache__/
+ml_backend/*.py[cod]
+ml_backend/*$py.class
+ml_backend/*.so
+ml_backend/.Python
+ml_backend/venv/
+ml_backend/env/
+ml_backend/.venv
+ml_backend/.pytest_cache/
+ml_backend/.coverage
+ml_backend/htmlcov/
+ml_backend/*.egg-info/
+ml_backend/dist/
+ml_backend/build/
+
+# ML artifacts (download during build)
+*.whl
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+ml_backend/packages/*.whl
+ml_backend/data/**/*.h5
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes
+postgres_data/
+redis_data/
+ml_models/
+ml_data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS
+Thumbs.db
+*.pem
+rpa_*
+
+# Binaries
+*.exe
+*.dll
+
+# Documents (keep in Google Drive, not repo)
+*.pdf
+
+# Coverage
+.coverage
+
+# Claude
+.claude/settings.local.json

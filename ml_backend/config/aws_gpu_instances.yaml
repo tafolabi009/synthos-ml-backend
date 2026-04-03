@@ -1,0 +1,312 @@
+# AWS GPU Instance Configuration
+# ================================
+# Just set GPU_TIER in AWS Secrets Manager and the system auto-configures.
+#
+# Environment Variables (set in Secrets Manager or .env):
+#
+# Required:
+#   GPU_TIER: One of 'ultra', 'high', 'medium', 'standard', 'basic', 'auto'
+#            - 'auto' (default): Auto-detect from hardware
+#            - 'ultra': Optimized for H100 (p5.48xlarge)
+#            - 'high': Optimized for A100 (p4d.24xlarge, p4de.24xlarge)
+#            - 'medium': Optimized for V100 (p3.8xlarge, p3.16xlarge)
+#            - 'standard': Optimized for A10G (g5.xlarge - g5.48xlarge)
+#            - 'basic': Optimized for T4 (g4dn instances)
+#
+# Optional Overrides:
+#   MAX_GPU_MEMORY_FRACTION: 0.0-1.0 (default: 0.9)
+#   ENABLE_MIXED_PRECISION: true/false (default: true)
+#   FORCE_SEQUENTIAL_TRAINING: true/false (default: false)
+#   MAX_BATCH_SIZE: Override max batch size (default: auto)
+#   NUM_GPUS: Override GPU count detection (default: auto)
+
+# ============================================================================
+# AWS Instance Type Reference
+# ============================================================================
+
+aws_instances:
+  # ============ ULTRA TIER (H100) ============
+  p5.48xlarge:
+    gpus: 8
+    gpu_model: H100
+    vram_per_gpu: 80
+    total_vram: 640
+    vcpus: 192
+    ram_gb: 2048
+    cost_per_hour: 98.32
+    recommended_for:
+      - "Large-scale production deployments"
+      - "Maximum validation quality"
+      - "Fastest training times"
+    notes: "Exceeds original spec. Best-in-class."
+
+  # ============ HIGH TIER (A100) ============
+  p4d.24xlarge:
+    gpus: 8
+    gpu_model: A100-40GB
+    vram_per_gpu: 40
+    total_vram: 320
+    vcpus: 96
+    ram_gb: 1152
+    cost_per_hour: 32.77
+    recommended_for:
+      - "Production deployments"
+      - "Full quality validation"
+      - "Original design spec equivalent"
+    notes: "Recommended for production. Matches original 320GB spec."
+
+  p4de.24xlarge:
+    gpus: 8
+    gpu_model: A100-80GB
+    vram_per_gpu: 80
+    total_vram: 640
+    vcpus: 96
+    ram_gb: 1152
+    cost_per_hour: 40.96
+    recommended_for:
+      - "Large model training"
+      - "Larger batch sizes"
+      - "Future-proofing"
+    notes: "Double VRAM of p4d.24xlarge."
+
+  # ============ MEDIUM TIER (V100) ============
+  p3.8xlarge:
+    gpus: 4
+    gpu_model: V100
+    vram_per_gpu: 16
+    total_vram: 64
+    vcpus: 32
+    ram_gb: 244
+    cost_per_hour: 12.24
+    recommended_for:
+      - "Budget production"
+      - "Medium-scale validation"
+      - "Development with full pipeline"
+    notes: "Good balance of cost/performance."
+
+  p3.16xlarge:
+    gpus: 8
+    gpu_model: V100
+    vram_per_gpu: 16
+    total_vram: 128
+    vcpus: 64
+    ram_gb: 488
+    cost_per_hour: 24.48
+    recommended_for:
+      - "Parallel training"
+      - "Larger batch validation"
+    notes: "Double the GPUs of p3.8xlarge."
+
+  # ============ STANDARD TIER (A10G) ============
+  g5.xlarge:
+    gpus: 1
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 24
+    vcpus: 4
+    ram_gb: 16
+    cost_per_hour: 1.01
+    recommended_for:
+      - "Single validation"
+      - "Testing"
+      - "Development"
+    notes: "Cost-effective for small workloads."
+
+  g5.2xlarge:
+    gpus: 1
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 24
+    vcpus: 8
+    ram_gb: 32
+    cost_per_hour: 1.21
+    recommended_for:
+      - "Single validation with more CPU"
+      - "Data preprocessing"
+    notes: "Good for CPU-bound tasks."
+
+  g5.4xlarge:
+    gpus: 1
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 24
+    vcpus: 16
+    ram_gb: 64
+    cost_per_hour: 1.62
+    recommended_for:
+      - "Larger datasets"
+      - "More parallel data loading"
+    notes: "Good for I/O intensive workloads."
+
+  g5.12xlarge:
+    gpus: 4
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 96
+    vcpus: 48
+    ram_gb: 192
+    cost_per_hour: 5.67
+    recommended_for:
+      - "Multi-GPU inference"
+      - "Cost-effective production"
+      - "Development with realistic parallelism"
+    notes: "Best value for multi-GPU. Recommended for cost-conscious production."
+
+  g5.24xlarge:
+    gpus: 4
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 96
+    vcpus: 96
+    ram_gb: 384
+    cost_per_hour: 8.14
+    recommended_for:
+      - "High CPU requirements"
+      - "Large-scale data preprocessing"
+    notes: "Same GPUs as g5.12xlarge with more CPU."
+
+  g5.48xlarge:
+    gpus: 8
+    gpu_model: A10G
+    vram_per_gpu: 24
+    total_vram: 192
+    vcpus: 192
+    ram_gb: 768
+    cost_per_hour: 16.29
+    recommended_for:
+      - "Maximum A10G parallelism"
+      - "Large batch inference"
+    notes: "8x A10G for maximum throughput."
+
+  # ============ BASIC TIER (T4) ============
+  g4dn.xlarge:
+    gpus: 1
+    gpu_model: T4
+    vram_per_gpu: 16
+    total_vram: 16
+    vcpus: 4
+    ram_gb: 16
+    cost_per_hour: 0.53
+    recommended_for:
+      - "Development"
+      - "Testing"
+      - "CI/CD pipelines"
+    notes: "Most cost-effective GPU option."
+
+  g4dn.12xlarge:
+    gpus: 4
+    gpu_model: T4
+    vram_per_gpu: 16
+    total_vram: 64
+    vcpus: 48
+    ram_gb: 192
+    cost_per_hour: 3.91
+    recommended_for:
+      - "Multi-GPU development"
+      - "Staging environment"
+    notes: "4x T4 for parallel testing."
+
+
+# ============================================================================
+# Performance Comparison Matrix
+# ============================================================================
+
+performance_matrix:
+  # Validation time estimates (hours) for standard 10M row dataset
+  validation_times:
+    p5.48xlarge: 2.5
+    p4d.24xlarge: 4.0
+    p4de.24xlarge: 3.5
+    p3.16xlarge: 10.0
+    p3.8xlarge: 15.0
+    g5.48xlarge: 18.0
+    g5.12xlarge: 25.0
+    g4dn.12xlarge: 40.0
+
+  # Quality factor (1.0 = optimal)
+  quality_factors:
+    p5.48xlarge: 1.00
+    p4d.24xlarge: 0.98
+    p4de.24xlarge: 1.00
+    p3.16xlarge: 0.92
+    p3.8xlarge: 0.88
+    g5.48xlarge: 0.90
+    g5.12xlarge: 0.85
+    g4dn.12xlarge: 0.75
+
+  # Monthly cost (reserved 1-year)
+  monthly_cost_reserved:
+    p5.48xlarge: 42800
+    p4d.24xlarge: 14300
+    p4de.24xlarge: 17800
+    p3.16xlarge: 10700
+    p3.8xlarge: 5300
+    g5.48xlarge: 7100
+    g5.12xlarge: 2500
+    g4dn.12xlarge: 1700
+
+
+# ============================================================================
+# Recommended Configurations by Use Case
+# ============================================================================
+
+recommendations:
+  production_maximum_quality:
+    instance: p4d.24xlarge
+    reason: "Best balance of quality, speed, and cost for production"
+    estimated_monthly_cost: "$14,300 reserved"
+    validation_quality: "98%"
+    validation_time: "4 hours"
+
+  production_cost_optimized:
+    instance: g5.12xlarge
+    reason: "4x A10G provides good parallelism at lower cost"
+    estimated_monthly_cost: "$2,500 reserved"
+    validation_quality: "85%"
+    validation_time: "25 hours"
+    notes: "May need to run validations overnight"
+
+  development:
+    instance: g4dn.xlarge
+    reason: "Minimum viable GPU for testing pipeline"
+    estimated_monthly_cost: "$230 reserved"
+    validation_quality: "70%"
+    validation_time: "Sequential, ~60+ hours"
+    notes: "Use skip_cascade_training=True for faster iteration"
+
+  staging:
+    instance: g5.xlarge
+    reason: "Single A10G for pre-production testing"
+    estimated_monthly_cost: "$440 reserved"
+    validation_quality: "75%"
+    validation_time: "~35 hours"
+
+
+# ============================================================================
+# Secrets Manager Configuration Template
+# ============================================================================
+
+secrets_manager_template:
+  # Copy this to AWS Secrets Manager as JSON
+  production:
+    GPU_TIER: "auto"
+    MAX_GPU_MEMORY_FRACTION: "0.9"
+    ENABLE_MIXED_PRECISION: "true"
+    FORCE_SEQUENTIAL_TRAINING: "false"
+    COLLAPSE_THRESHOLD: "65.0"
+    DIVERSITY_THRESHOLD: "50.0"
+
+  development:
+    GPU_TIER: "basic"
+    MAX_GPU_MEMORY_FRACTION: "0.8"
+    ENABLE_MIXED_PRECISION: "true"
+    FORCE_SEQUENTIAL_TRAINING: "true"
+    COLLAPSE_THRESHOLD: "60.0"
+    DIVERSITY_THRESHOLD: "40.0"
+
+  cost_optimized:
+    GPU_TIER: "standard"
+    MAX_GPU_MEMORY_FRACTION: "0.85"
+    ENABLE_MIXED_PRECISION: "true"
+    FORCE_SEQUENTIAL_TRAINING: "false"
+    MAX_BATCH_SIZE: "64"

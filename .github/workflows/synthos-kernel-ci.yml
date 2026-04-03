@@ -1,0 +1,323 @@
+name: SynthOS Kernel CI/CD
+
+on:
+  push:
+    paths:
+      - 'ml_backend/src/synthos_kernel/**'
+  pull_request:
+    paths:
+      - 'ml_backend/src/synthos_kernel/**'
+  workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: 'Run full benchmarks'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  CUDA_VERSION: "12.2"
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  # ===========================================================================
+  # Build Job - Compile for all architectures
+  # ===========================================================================
+  build:
+    name: Build CUDA Kernel
+    runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:12.2.0-devel-ubuntu22.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake python3 python3-pip
+          pip3 install torch --index-url https://download.pytorch.org/whl/cu121
+      
+      - name: Build with CMake (all architectures)
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DSYNTHOS_CUDA_ARCH=all
+          cmake --build . --parallel $(nproc)
+          
+          echo "=== Build Summary ==="
+          ls -lh libsynthos.so
+          echo "Binary size: $(du -h libsynthos.so | cut -f1)"
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libsynthos-all-arch
+          path: ml_backend/src/synthos_kernel/build/libsynthos.so
+          retention-days: 7
+
+  # ===========================================================================
+  # Test Jobs - Run on different GPU architectures
+  # ===========================================================================
+  test-v100:
+    name: Test on V100 (sm_70)
+    needs: build
+    runs-on: [self-hosted, gpu, v100]
+    if: github.event_name == 'push' || github.event.inputs.run_benchmarks == 'true'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download library
+        uses: actions/download-artifact@v4
+        with:
+          name: libsynthos-all-arch
+          path: ml_backend/src/synthos_kernel/build/
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cu121
+          pip install numpy
+      
+      - name: Run tests
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          chmod +x build/libsynthos.so
+          python test_spectral.py --lib build/libsynthos.so -v
+      
+      - name: Run benchmark
+        if: github.event.inputs.run_benchmarks == 'true'
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          python benchmark_architectures.py \
+            --lib build/libsynthos.so \
+            --output v100_results.json \
+            --markdown v100_report.md
+      
+      - name: Upload benchmark results
+        if: github.event.inputs.run_benchmarks == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-v100
+          path: |
+            ml_backend/src/synthos_kernel/v100_results.json
+            ml_backend/src/synthos_kernel/v100_report.md
+
+  test-a100:
+    name: Test on A100 (sm_80)
+    needs: build
+    runs-on: [self-hosted, gpu, a100]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download library
+        uses: actions/download-artifact@v4
+        with:
+          name: libsynthos-all-arch
+          path: ml_backend/src/synthos_kernel/build/
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cu121
+          pip install numpy
+      
+      - name: Run tests
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          chmod +x build/libsynthos.so
+          python test_spectral.py --lib build/libsynthos.so --benchmark -v
+      
+      - name: Run full benchmark
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          python benchmark_architectures.py \
+            --lib build/libsynthos.so \
+            --output a100_results.json \
+            --markdown a100_report.md
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-a100
+          path: |
+            ml_backend/src/synthos_kernel/a100_results.json
+            ml_backend/src/synthos_kernel/a100_report.md
+
+  test-h100:
+    name: Test on H100 (sm_90)
+    needs: build
+    runs-on: [self-hosted, gpu, h100]
+    if: github.event_name == 'push' || github.event.inputs.run_benchmarks == 'true'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download library
+        uses: actions/download-artifact@v4
+        with:
+          name: libsynthos-all-arch
+          path: ml_backend/src/synthos_kernel/build/
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cu121
+          pip install numpy
+      
+      - name: Run tests
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          chmod +x build/libsynthos.so
+          python test_spectral.py --lib build/libsynthos.so --benchmark -v
+      
+      - name: Run full benchmark
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          python benchmark_architectures.py \
+            --lib build/libsynthos.so \
+            --output h100_results.json \
+            --markdown h100_report.md
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-h100
+          path: |
+            ml_backend/src/synthos_kernel/h100_results.json
+            ml_backend/src/synthos_kernel/h100_report.md
+
+  # ===========================================================================
+  # Memory Safety Check
+  # ===========================================================================
+  memory-check:
+    name: CUDA Memory Check
+    needs: build
+    runs-on: [self-hosted, gpu, a100]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download library
+        uses: actions/download-artifact@v4
+        with:
+          name: libsynthos-all-arch
+          path: ml_backend/src/synthos_kernel/build/
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: pip install torch --index-url https://download.pytorch.org/whl/cu121
+      
+      - name: Run compute-sanitizer
+        working-directory: ml_backend/src/synthos_kernel
+        run: |
+          chmod +x build/libsynthos.so
+          
+          # Memory check
+          compute-sanitizer --tool memcheck \
+            python -c "
+          import torch
+          import sys
+          sys.path.insert(0, '.')
+          from python_wrapper import SynthOSKernel
+          kernel = SynthOSKernel('build/libsynthos.so')
+          x = torch.randn(4096, 128, device='cuda', dtype=torch.float32)
+          for _ in range(10):
+              _ = kernel.compute_spectral_entropy(x)
+          print('Memory check PASSED')
+          "
+          
+          # Race condition check
+          compute-sanitizer --tool racecheck \
+            python -c "
+          import torch
+          import sys
+          sys.path.insert(0, '.')
+          from python_wrapper import SynthOSKernel
+          kernel = SynthOSKernel('build/libsynthos.so')
+          x = torch.randn(2048, 64, device='cuda', dtype=torch.float32)
+          for _ in range(5):
+              _ = kernel.compute_spectral_entropy(x)
+          print('Race check PASSED')
+          "
+
+  # ===========================================================================
+  # Report Generation
+  # ===========================================================================
+  generate-report:
+    name: Generate Performance Report
+    needs: [test-v100, test-a100, test-h100]
+    runs-on: ubuntu-latest
+    if: always() && github.event.inputs.run_benchmarks == 'true'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-*
+          path: benchmarks/
+          merge-multiple: true
+      
+      - name: Generate combined report
+        run: |
+          cat << 'EOF' > combined_report.md
+          # SynthOS Kernel Multi-GPU Performance Report
+          
+          Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Commit: ${{ github.sha }}
+          
+          ## Results by GPU
+          
+          EOF
+          
+          for f in benchmarks/*_report.md; do
+            if [ -f "$f" ]; then
+              echo "### $(basename $f .md | tr '[:lower:]' '[:upper:]')" >> combined_report.md
+              tail -n +3 "$f" >> combined_report.md
+              echo "" >> combined_report.md
+            fi
+          done
+          
+          cat combined_report.md
+      
+      - name: Upload combined report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: combined_report.md
+      
+      - name: Post to PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('combined_report.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });

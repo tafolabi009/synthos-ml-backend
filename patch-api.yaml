@@ -1,0 +1,18 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        docker pull us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/api-gateway:latest
+
+        # The promo code handler and route changes need a full rebuild
+        # For now, tag current image as it already has the credits system
+        docker tag us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/api-gateway:latest \
+          us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/api-gateway:stable
+
+        docker push us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/api-gateway:stable
+
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/synthos/api-gateway:stable'
+timeout: '300s'

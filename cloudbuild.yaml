@@ -1,0 +1,70 @@
+steps:
+  # Build API Gateway
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGISTRY}/api-gateway:${SHORT_SHA}'
+      - '-t'
+      - '${_REGISTRY}/api-gateway:latest'
+      - '-f'
+      - 'go_backend/Dockerfile'
+      - '.'
+    id: 'build-api-gateway'
+
+  # Build Job Orchestrator
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGISTRY}/job-orchestrator:${SHORT_SHA}'
+      - '-t'
+      - '${_REGISTRY}/job-orchestrator:latest'
+      - '-f'
+      - 'job_orchestrator/Dockerfile'
+      - '.'
+    id: 'build-job-orchestrator'
+
+  # Build Data Service
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGISTRY}/data-service:${SHORT_SHA}'
+      - '-t'
+      - '${_REGISTRY}/data-service:latest'
+      - '-f'
+      - 'data_service/Dockerfile'
+      - '.'
+    id: 'build-data-service'
+
+  # Build ML Backend (CPU for Cloud Run)
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGISTRY}/ml-backend:${SHORT_SHA}'
+      - '-t'
+      - '${_REGISTRY}/ml-backend:latest'
+      - '-f'
+      - 'ml_backend/Dockerfile.cloudrun'
+      - 'ml_backend/'
+    id: 'build-ml-backend'
+
+images:
+  - '${_REGISTRY}/api-gateway:${SHORT_SHA}'
+  - '${_REGISTRY}/api-gateway:latest'
+  - '${_REGISTRY}/job-orchestrator:${SHORT_SHA}'
+  - '${_REGISTRY}/job-orchestrator:latest'
+  - '${_REGISTRY}/data-service:${SHORT_SHA}'
+  - '${_REGISTRY}/data-service:latest'
+  - '${_REGISTRY}/ml-backend:${SHORT_SHA}'
+  - '${_REGISTRY}/ml-backend:latest'
+
+substitutions:
+  _REGISTRY: 'us-central1-docker.pkg.dev/${PROJECT_ID}/synthos'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+timeout: '1800s'

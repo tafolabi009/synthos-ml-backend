@@ -1,0 +1,162 @@
+name: SynthOS GCP Deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - api-gateway
+          - job-orchestrator
+          - data-service
+          - ml-backend
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/synthos
+
+jobs:
+  test:
+    name: "Run Tests"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    env:
+      DATABASE_URL: postgres://testuser:testpass@localhost:5432/testdb?sslmode=disable
+      REDIS_URL: localhost:6379
+      JWT_SECRET: test-jwt-secret-for-ci-minimum-32-chars
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go_backend/go.sum
+
+      - name: Initialize database
+        run: PGPASSWORD=testpass psql -h localhost -U testuser -d testdb -f scripts/init-db.sql
+
+      - name: Run migrations
+        run: PGPASSWORD=testpass psql -h localhost -U testuser -d testdb -f migrations/000001_initial_schema.up.sql -f migrations/000002_add_credits_system.up.sql
+
+      - name: Test Go Backend
+        working-directory: go_backend
+        run: go test -v -race ./pkg/... ./internal/... -timeout=120s
+
+      - name: Test Job Orchestrator
+        working-directory: job_orchestrator
+        run: go test -v -race ./internal/... -timeout=120s
+
+  build-and-deploy:
+    name: "Build & Deploy to Cloud Run"
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push API Gateway
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'api-gateway' || github.event_name == 'push'
+        run: |
+          docker build -t ${{ env.REGISTRY }}/api-gateway:${{ github.sha }} -t ${{ env.REGISTRY }}/api-gateway:latest -f go_backend/Dockerfile .
+          docker push ${{ env.REGISTRY }}/api-gateway:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/api-gateway:latest
+
+      - name: Build and push Job Orchestrator
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'job-orchestrator' || github.event_name == 'push'
+        run: |
+          docker build -t ${{ env.REGISTRY }}/job-orchestrator:${{ github.sha }} -t ${{ env.REGISTRY }}/job-orchestrator:latest -f job_orchestrator/Dockerfile .
+          docker push ${{ env.REGISTRY }}/job-orchestrator:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/job-orchestrator:latest
+
+      - name: Build and push Data Service
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'data-service' || github.event_name == 'push'
+        run: |
+          docker build -t ${{ env.REGISTRY }}/data-service:${{ github.sha }} -t ${{ env.REGISTRY }}/data-service:latest -f data_service/Dockerfile .
+          docker push ${{ env.REGISTRY }}/data-service:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/data-service:latest
+
+      - name: Build and push ML Backend
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'ml-backend' || github.event_name == 'push'
+        run: |
+          docker build -t ${{ env.REGISTRY }}/ml-backend:${{ github.sha }} -t ${{ env.REGISTRY }}/ml-backend:latest -f ml_backend/Dockerfile.production ml_backend/
+          docker push ${{ env.REGISTRY }}/ml-backend:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/ml-backend:latest
+
+      - name: Deploy API Gateway to Cloud Run
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'api-gateway' || github.event_name == 'push'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: synthos-api-gateway
+          image: ${{ env.REGISTRY }}/api-gateway:${{ github.sha }}
+          region: ${{ env.GCP_REGION }}
+          env_vars: |
+            ENVIRONMENT=production
+            CLOUD_PROVIDER=gcp
+            GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}
+            GCS_BUCKET=synthos-datasets-${{ env.GCP_PROJECT_ID }}
+            PORT=8000
+            ENABLE_METRICS=true
+          secrets: |
+            JWT_SECRET=synthos-jwt-secret:latest
+            REDIS_PASSWORD=synthos-redis-password:latest
+
+      - name: Deploy Job Orchestrator to Cloud Run
+        if: github.event.inputs.service == 'all' || github.event.inputs.service == 'job-orchestrator' || github.event_name == 'push'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: synthos-job-orchestrator
+          image: ${{ env.REGISTRY }}/job-orchestrator:${{ github.sha }}
+          region: ${{ env.GCP_REGION }}
+          env_vars: |
+            ENVIRONMENT=production
+            HTTP_PORT=8080
+            WORKERS=10
+            ENABLE_METRICS=true
+
+      - name: Smoke test
+        run: |
+          URL=$(gcloud run services describe synthos-api-gateway --region=${{ env.GCP_REGION }} --format="value(status.url)")
+          echo "Testing ${URL}/health ..."
+          curl -sf "${URL}/health" || exit 1
+          echo "Smoke test passed!"

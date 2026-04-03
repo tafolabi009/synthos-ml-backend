@@ -1,0 +1,416 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Data Layer
+  # ============================================
+  
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: synthos-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-synthos}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synthos-network
+    restart: unless-stopped
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: synthos-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synthos-network
+    restart: unless-stopped
+
+  # MinIO (S3-compatible storage for development)
+  minio:
+    image: minio/minio:latest
+    container_name: synthos-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - synthos-network
+    restart: unless-stopped
+
+  # ============================================
+  # Python ML Unified Service (All ML Backends)
+  # ============================================
+
+  # ML Backend (Validation, Collapse, Data Services)
+  ml-backend:
+    build:
+      context: ./ml_backend
+      dockerfile: Dockerfile.production
+    container_name: synthos-ml-backend
+    environment:
+      VALIDATION_SERVICE_PORT: 50051
+      COLLAPSE_SERVICE_PORT: 50052
+      DATA_SERVICE_PORT: 50054
+      SERVICE_HOST: 0.0.0.0
+      
+      # GPU Configuration
+      GPU_DEVICES: "0,1,2,3"
+      GPU_MEMORY_FRACTION: "0.8"
+      
+      # Paths
+      MODEL_PATH: /models
+      CACHE_PATH: /cache
+      SIGNATURE_DB_PATH: /data/signatures
+      
+      # Training defaults
+      DEFAULT_BATCH_SIZE: 512
+      DEFAULT_EPOCHS: 100
+      
+      # gRPC
+      GRPC_MAX_WORKERS: 10
+      GRPC_MAX_MESSAGE_SIZE: 100000000
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synthos}
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      
+      # MinIO
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: datasets
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # TLS (disabled for dev)
+      TLS_ENABLED: "false"
+    ports:
+      - "50051:50051"
+      - "50052:50052"
+      - "50054:50054"
+    volumes:
+      - ./ml_backend:/app
+      - ml_models:/models
+      - ml_cache:/cache
+      - ml_signatures:/data/signatures
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    # GPU support - uncomment when running on GPU-enabled host
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 4
+    #           capabilities: [gpu]
+
+  # ============================================
+  # Go Microservices
+  # ============================================
+
+  # API Gateway (Customer-facing REST API - Fiber)
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./go_backend/Dockerfile
+    container_name: synthos-api-gateway
+    environment:
+      ENVIRONMENT: development
+      PORT: 8000
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synthos}?sslmode=disable
+      REDIS_URL: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      
+      # AWS S3 Configuration (using MinIO)
+      AWS_REGION: us-east-1
+      S3_BUCKET: synthos-datasets
+      S3_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      
+      # Job Orchestrator (REST API)
+      ORCHESTRATOR_ADDR: job-orchestrator:8080
+      
+      # Tracing
+      JAEGER_ENDPOINT: jaeger:6831
+      
+      # Feature flags
+      ENABLE_METRICS: "true"
+      ENABLE_CORS: "true"
+      ENABLE_TRACING: "true"
+    ports:
+      - "8000:8000"
+    # Volume mount disabled for production container
+    # volumes:
+    #   - ./go_backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      job-orchestrator:
+        condition: service_started
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Job Orchestrator (Central Pipeline Controller)
+  job-orchestrator:
+    build:
+      context: .
+      dockerfile: ./job_orchestrator/Dockerfile
+    container_name: synthos-job-orchestrator
+    environment:
+      ENVIRONMENT: development
+      # REST API Port
+      HTTP_PORT: 8080
+      # gRPC Port (legacy support)
+      GRPC_PORT: 50053
+      
+      # Worker pool configuration
+      WORKERS: 10
+      
+      # ML Service addresses (gRPC)
+      VALIDATION_SERVICE_ADDR: ml-backend:50051
+      COLLAPSE_SERVICE_ADDR: ml-backend:50052
+      DATA_SERVICE_ADDR: ml-backend:50054
+      
+      # Database
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synthos}?sslmode=disable
+      REDIS_URL: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      
+      # TLS Configuration (disabled for development)
+      TLS_ENABLED: "false"
+      TLS_CERT_FILE: /etc/synthos/certs/server.crt
+      TLS_KEY_FILE: /etc/synthos/certs/server.key
+      TLS_CA_FILE: /etc/synthos/certs/ca.crt
+      
+      # Feature flags
+      ENABLE_METRICS: "true"
+      ENABLE_TRACING: "false"
+    ports:
+      - "8080:8080"   # REST API
+      - "50053:50053" # gRPC (legacy)
+    # Volume mount disabled for production container
+    # volumes:
+    #   - ./job_orchestrator:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-backend:
+        condition: service_started
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Data Service (Dataset management & S3)
+  data-service:
+    build:
+      context: .
+      dockerfile: ./data_service/Dockerfile
+    container_name: synthos-data-service
+    environment:
+      ENVIRONMENT: development
+      PORT: 50055
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-synthos}?sslmode=disable
+      REDIS_URL: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      
+      # S3 Configuration
+      AWS_REGION: us-east-1
+      S3_BUCKET: synthos-datasets
+      S3_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      
+      # TLS Configuration
+      TLS_ENABLED: "false"
+      
+      # Feature flags
+      ENABLE_METRICS: "true"
+    ports:
+      - "50055:50055"
+    # Volume mount disabled for production container
+    # volumes:
+    #   - ./data_service:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - synthos-network
+    restart: unless-stopped
+
+
+
+  # ============================================
+  # Monitoring & Observability (Optional)
+  # ============================================
+
+  # Prometheus (Metrics collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: synthos-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana (Metrics visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: synthos-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Jaeger (Distributed tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: synthos-jaeger
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+    ports:
+      - "5775:5775/udp"  # accept zipkin.thrift over compact thrift protocol (deprecated, used by legacy clients only)
+      - "6831:6831/udp"  # accept jaeger.thrift over compact thrift protocol
+      - "6832:6832/udp"  # accept jaeger.thrift over binary thrift protocol
+      - "5778:5778"      # serve configs
+      - "16686:16686"    # serve frontend
+      - "14268:14268"    # accept jaeger.thrift directly from clients
+      - "14250:14250"    # accept model.proto
+      - "9411:9411"      # Zipkin compatible endpoint (optional)
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Admin Dashboard
+  admin-dashboard:
+    build:
+      context: ./admin_dashboard
+      dockerfile: Dockerfile
+    container_name: synthos-admin-dashboard
+    environment:
+      ORCHESTRATOR_ADDR: http://job-orchestrator:8080
+      ADMIN_PORT: 3001
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./admin_dashboard:/app
+    depends_on:
+      - job-orchestrator
+    networks:
+      - synthos-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  ml_models:
+    driver: local
+  ml_cache:
+    driver: local
+  ml_signatures:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  synthos-network:
+    driver: bridge
+    name: synthos-network
