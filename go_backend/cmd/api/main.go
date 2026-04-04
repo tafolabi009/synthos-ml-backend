@@ -111,6 +111,9 @@ func main() {
 		}
 	}
 
+	// Set package-level validation client for standalone handler functions
+	handlers.SetValidationClient(validationClient)
+
 	// Initialize DatasetHandler with dependencies (Dependency Injection)
 	datasetRepo := repository.NewDatasetRepository(database.GetDB())
 	var datasetHandler *handlers.DatasetHandler
@@ -331,6 +334,7 @@ func main() {
 				validations.Get("/:id/certificate", middleware.RequireScopes("read:validations"), handlers.GetValidationCertificateFiber)
 				validations.Get("/:id/collapse-details", middleware.RequireScopes("read:validations"), handlers.GetCollapseDetailsFiber)
 				validations.Get("/:id/recommendations", middleware.RequireScopes("read:validations"), handlers.GetRecommendationsFiber)
+				validations.Post("/:id/cancel", middleware.RequireScopes("write:validations"), handlers.CancelValidationFiber)
 			}
 
 			// Warranty management
@@ -398,6 +402,9 @@ func main() {
 			adminRoutes.Get("/validations", handlers.ListAllValidationsFiber)
 			adminRoutes.Get("/datasets", handlers.ListAllDatasetsFiber)
 			adminRoutes.Delete("/users/:id", handlers.DeleteUserFiber)
+			adminRoutes.Get("/warranties", handlers.ListAllWarrantiesFiber)
+			adminRoutes.Patch("/warranties/:id/approve", handlers.ApproveWarrantyFiber)
+			adminRoutes.Patch("/warranties/:id/reject", handlers.RejectWarrantyFiber)
 			adminRoutes.Get("/audit-log", handlers.GetAuditLogFiber)
 			adminRoutes.Get("/settings", handlers.GetPlatformSettingsFiber)
 			adminRoutes.Patch("/settings", handlers.UpdatePlatformSettingsFiber)
@@ -413,6 +420,7 @@ func main() {
 			supportRoutes.Patch("/tickets/:id/status", handlers.UpdateTicketStatusFiber)
 			supportRoutes.Patch("/tickets/:id/assign", handlers.AssignTicketFiber)
 			supportRoutes.Patch("/tickets/:id/priority", handlers.UpdateTicketPriorityFiber)
+			supportRoutes.Patch("/warranties/:id/claim/:claim_id/process", handlers.ProcessWarrantyClaimFiber)
 			supportRoutes.Get("/users/:id", handlers.GetUserForSupportFiber)
 			supportRoutes.Get("/users/:id/validations", handlers.GetUserValidationsFiber)
 		}

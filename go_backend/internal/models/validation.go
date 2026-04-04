@@ -9,7 +9,8 @@ type Validation struct {
 	ID                  string     `json:"validation_id" db:"id"`
 	DatasetID           string     `json:"dataset_id" db:"dataset_id"`
 	UserID              string     `json:"user_id" db:"user_id"`
-	Status              string     `json:"status" db:"status"` // queued, running, completed, failed
+	ValidationType      string     `json:"validation_type,omitempty" db:"validation_type"` // comprehensive, distribution, correlation, temporal, full
+	Status              string     `json:"status" db:"status"`                             // queued, processing, completed, failed, cancelled
 	RiskScore           *int       `json:"risk_score,omitempty" db:"risk_score"`
 	RiskLevel           *string    `json:"risk_level,omitempty" db:"risk_level"`
 	Recommendation      *string    `json:"recommendation,omitempty" db:"recommendation"`

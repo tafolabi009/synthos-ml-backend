@@ -267,6 +267,7 @@ func runMigrations(pool *pgxpool.Pool) error {
 		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS risk_level VARCHAR(50)`,
 		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS recommendation TEXT`,
 		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS warranty_eligible BOOLEAN`,
+		`ALTER TABLE validations ADD COLUMN IF NOT EXISTS validation_type VARCHAR(50) DEFAULT 'comprehensive'`,
 		
 		// Fix warranties table to match repository code
 		`ALTER TABLE warranties ADD COLUMN IF NOT EXISTS warranty_type VARCHAR(50)`,
