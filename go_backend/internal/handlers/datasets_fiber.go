@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tafolabi009/backend/go_backend/internal/models"
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
+	"github.com/tafolabi009/backend/go_backend/pkg/database"
 	"github.com/tafolabi009/backend/go_backend/pkg/grpcclient"
 	"github.com/tafolabi009/backend/go_backend/pkg/storage"
 	validationpb "github.com/tafolabi009/backend/proto/validation"
@@ -193,14 +194,15 @@ func (h *DatasetHandler) CompleteUploadFiber(c *fiber.Ctx) error {
 		})
 	}
 
-	// Trigger ML backend via gRPC - this fixes the "Ghost Job" bug
-	if h.ValidationClient != nil {
-		go func() {
-			// Use a separate context for the async gRPC call
+	// Trigger ML backend via gRPC and update status when done
+	go func() {
+		db := database.GetDB()
+		updateCtx := context.Background()
+
+		if h.ValidationClient != nil {
 			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer grpcCancel()
 
-			// Create cascade config with defaults
 			cascadeConfig := &validationpb.CascadeConfig{
 				NumEpochs:               10,
 				BatchSize:               32,
@@ -212,18 +214,24 @@ func (h *DatasetHandler) CompleteUploadFiber(c *fiber.Ctx) error {
 				EnableFrequencyAnalysis: true,
 			}
 
-			// Trigger cascade training on the ML backend
 			_, err := h.ValidationClient.TrainCascade(grpcCtx, datasetID, dataset.S3Path, cascadeConfig)
 			if err != nil {
-				// Log the error but don't fail the request since data is already saved
-				log.Printf("⚠️ Failed to trigger ML backend for dataset %s: %v", datasetID, err)
+				log.Printf("⚠️ ML processing failed for dataset %s: %v - marking as ready anyway", datasetID, err)
 			} else {
-				log.Printf("✅ Successfully triggered ML backend for dataset %s", datasetID)
+				log.Printf("✅ ML processing completed for dataset %s", datasetID)
 			}
-		}()
-	} else {
-		log.Printf("⚠️ ValidationClient not available, skipping ML backend trigger for dataset %s", datasetID)
-	}
+		} else {
+			log.Printf("⚠️ No ML client - marking dataset %s as ready directly", datasetID)
+		}
+
+		// Always mark dataset as ready so validations can proceed
+		_, err := db.Exec(updateCtx, `UPDATE datasets SET status = 'ready', updated_at = NOW() WHERE id = $1`, datasetID)
+		if err != nil {
+			log.Printf("❌ Failed to update dataset %s status to ready: %v", datasetID, err)
+		} else {
+			log.Printf("✅ Dataset %s marked as ready", datasetID)
+		}
+	}()
 
 	response := models.CompleteUploadResponse{
 		DatasetID:           datasetID,

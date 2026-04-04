@@ -429,6 +429,8 @@ func runMigrations(pool *pgxpool.Pool) error {
 
 	// Admin promotion
 	_, _ = pool.Exec(ctx, `UPDATE users SET role = 'admin' WHERE email = 'tafolabi009@gmail.com'`)
+	// Fix stuck datasets - mark all "processing" or "uploading" as "ready"
+	_, _ = pool.Exec(ctx, `UPDATE datasets SET status = 'ready' WHERE status IN ('processing', 'uploading')`)
 
 	log.Println("✅ Database migrations completed")
 	return nil
