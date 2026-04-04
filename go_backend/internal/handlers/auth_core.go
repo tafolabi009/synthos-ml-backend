@@ -2,17 +2,23 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/tafolabi009/backend/go_backend/internal/auth"
 	"github.com/tafolabi009/backend/go_backend/internal/models"
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/email"
 )
 
 const (
@@ -97,6 +103,29 @@ func RegisterFiber(c *fiber.Ctx) error {
 		})
 	}
 
+	// Check for invite token
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+	role := "user"
+	autoVerified := false
+
+	if req.InviteToken != "" {
+		var inviteID, inviteEmail, inviteRole, inviteStatus string
+		var inviteExpiresAt time.Time
+		err := db.QueryRow(ctx,
+			`SELECT id, email, role, status, expires_at FROM invites WHERE token = $1`,
+			req.InviteToken,
+		).Scan(&inviteID, &inviteEmail, &inviteRole, &inviteStatus, &inviteExpiresAt)
+		if err == nil && inviteStatus == "pending" && time.Now().Before(inviteExpiresAt) {
+			role = inviteRole
+			autoVerified = true
+			// Mark invite as accepted
+			_, _ = db.Exec(ctx, `UPDATE invites SET status = 'accepted' WHERE id = $1`, inviteID)
+		}
+	}
+
 	// Create user
 	now := time.Now().UTC()
 	user := models.User{
@@ -107,18 +136,15 @@ func RegisterFiber(c *fiber.Ctx) error {
 		FullName:         strPtr(strings.TrimSpace(req.FullName)),
 		CompanyID:        strPtr("cmp_" + uuid.New().String()[:8]),
 		CompanyName:      strPtr(strings.TrimSpace(req.CompanyName)),
-		Role:             strPtr("user"),
+		Role:             strPtr(role),
 		TwoFactorEnabled: false,
-		EmailVerified:    false,
+		EmailVerified:    autoVerified,
 		IsActive:         true,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 
 	// Save user to database
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	userRepo := repository.NewUserRepository(database.GetDB())
 	if err := userRepo.Create(ctx, &user); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
@@ -142,12 +168,46 @@ func RegisterFiber(c *fiber.Ctx) error {
 	// Log security event
 	logSecurityEvent(ctx, user.ID, "user_registered", true, c.IP(), c.Get("User-Agent"), nil)
 
+	// If not auto-verified via invite, generate OTP for email verification
+	requiresVerification := false
+	if !autoVerified {
+		otp, err := generateOTP()
+		if err == nil {
+			otpHash, err := bcrypt.GenerateFromPassword([]byte(otp), bcrypt.DefaultCost)
+			if err == nil {
+				verID := "ver_" + uuid.New().String()[:8]
+				_, dbErr := db.Exec(ctx,
+					`INSERT INTO email_verifications (id, user_id, email, otp_hash, attempts, expires_at, created_at)
+					 VALUES ($1, $2, $3, $4, 0, $5, NOW())`,
+					verID, user.ID, user.Email, string(otpHash), time.Now().Add(10*time.Minute),
+				)
+				if dbErr == nil {
+					requiresVerification = true
+					// Send verification email (best-effort)
+					go func() {
+						emailClient := email.GetClient()
+						if emailClient.IsConfigured() {
+							name := strings.TrimSpace(req.FullName)
+							subject, html := email.VerificationOTPEmail(name, otp)
+							if err := emailClient.Send(user.Email, subject, html); err != nil {
+								log.Printf("Failed to send verification email to %s: %v", user.Email, err)
+							}
+						} else {
+							log.Printf("Email client not configured, skipping verification email for %s", user.Email)
+						}
+					}()
+				}
+			}
+		}
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"user_id":    user.ID,
-		"email":      user.Email,
-		"username":   user.Username,
-		"company_id": user.CompanyID,
-		"created_at": user.CreatedAt.Format(time.RFC3339),
+		"user_id":               user.ID,
+		"email":                 user.Email,
+		"username":              user.Username,
+		"company_id":            user.CompanyID,
+		"created_at":            user.CreatedAt.Format(time.RFC3339),
+		"requires_verification": requiresVerification,
 	})
 }
 
@@ -208,6 +268,17 @@ func LoginFiber(c *fiber.Ctx) error {
 				"message": "This account has been disabled",
 			},
 		})
+	}
+
+	// Check email verification status before proceeding
+	if !user.EmailVerified {
+		// Verify password first so we don't leak verification status to wrong credentials
+		if auth.CheckPasswordHash(req.Password, user.PasswordHash) {
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"requires_verification": true,
+				"email":                 user.Email,
+			})
+		}
 	}
 
 	// Verify password
@@ -753,9 +824,23 @@ func ForgotPasswordFiber(c *fiber.Ctx) error {
 			}
 
 			if err := userRepo.CreatePasswordResetToken(ctx, &resetToken); err == nil {
-				// In production, send email with reset link
-				// For now, log the token (remove in production!)
-				log.Printf("Password reset token for %s: %s", user.Email, token)
+				// Send password reset email (best-effort)
+				resetLink := fmt.Sprintf("https://synthos.dev/reset-password?token=%s", token)
+				go func() {
+					emailClient := email.GetClient()
+					if emailClient.IsConfigured() {
+						name := ""
+						if user.FullName != nil {
+							name = *user.FullName
+						}
+						subject, html := email.PasswordResetEmail(name, resetLink)
+						if err := emailClient.Send(user.Email, subject, html); err != nil {
+							log.Printf("Failed to send password reset email to %s: %v", user.Email, err)
+						}
+					} else {
+						log.Printf("Email client not configured, skipping password reset email for %s", user.Email)
+					}
+				}()
 
 				logSecurityEvent(ctx, user.ID, "password_reset_requested", true, c.IP(), c.Get("User-Agent"), nil)
 			}
@@ -895,100 +980,201 @@ func logSecurityEvent(ctx context.Context, userID, eventType string, success boo
 	})
 }
 
-// AdminResetPasswordFiber - TEMPORARY endpoint for admin password reset
-// This should be removed or properly secured in production
-// POST /api/v1/auth/admin-reset
-func AdminResetPasswordFiber(c *fiber.Ctx) error {
-	type ResetReq struct {
-		AdminKey    string `json:"admin_key"`
-		Email       string `json:"email"`
-		NewPassword string `json:"new_password"`
-	}
-
-	var req ResetReq
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
-	}
-
-	// Simple admin key check - replace with proper auth in production
-	if req.AdminKey != "SynthOS2024AdminKey!" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid admin key"})
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	userRepo := repository.NewUserRepository(database.GetDB())
-	user, err := userRepo.GetByEmail(ctx, strings.ToLower(strings.TrimSpace(req.Email)))
+// generateOTP generates a cryptographically secure 6-digit OTP
+func generateOTP() (string, error) {
+	max := big.NewInt(1000000)
+	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+		return "", fmt.Errorf("failed to generate OTP: %w", err)
 	}
-
-	// Hash new password
-	passwordHash, err := auth.HashPassword(req.NewPassword)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
-	}
-
-	// Update password
-	err = userRepo.UpdatePassword(ctx, user.ID, passwordHash, time.Now().UTC())
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update password"})
-	}
-
-	// Reset failed login attempts
-	_ = userRepo.UpdateLoginAttempts(ctx, user.ID, 0, nil)
-
-	return c.JSON(fiber.Map{
-		"success": true,
-		"message": "Password reset successfully",
-		"user_id": user.ID,
-	})
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
-// DebugDBFiber - TEMPORARY debug endpoint for checking database state
-// GET /api/v1/auth/debug-db
-func DebugDBFiber(c *fiber.Ctx) error {
-	adminKey := c.Query("key")
-	if adminKey != "SynthOS2024AdminKey!" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid key"})
+// VerifyEmailFiber handles email verification with OTP
+// POST /api/v1/auth/verify-email
+func VerifyEmailFiber(c *fiber.Ctx) error {
+	var req struct {
+		Email string `json:"email"`
+		OTP   string `json:"otp"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "Invalid request body"},
+		})
+	}
+
+	if req.Email == "" || req.OTP == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "VALIDATION_ERROR", "message": "Email and OTP are required"},
+		})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	db := database.GetDB()
-	
-	// Check table columns
-	var columns []string
-	rows, err := db.Query(ctx, `
-		SELECT column_name 
-		FROM information_schema.columns 
-		WHERE table_name = 'users' 
-		ORDER BY ordinal_position
-	`)
+
+	// Find latest non-expired verification for this email
+	var verID, userID, otpHash string
+	var attempts int
+	var expiresAt time.Time
+	err := db.QueryRow(ctx,
+		`SELECT ev.id, ev.user_id, ev.otp_hash, ev.attempts, ev.expires_at
+		 FROM email_verifications ev
+		 JOIN users u ON ev.user_id = u.id
+		 WHERE ev.email = $1 AND ev.expires_at > NOW()
+		 ORDER BY ev.created_at DESC LIMIT 1`,
+		strings.ToLower(strings.TrimSpace(req.Email)),
+	).Scan(&verID, &userID, &otpHash, &attempts, &expiresAt)
 	if err != nil {
-		return c.JSON(fiber.Map{"error": err.Error()})
-	}
-	defer rows.Close()
-	
-	for rows.Next() {
-		var col string
-		rows.Scan(&col)
-		columns = append(columns, col)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVALID_OTP", "message": "No pending verification found. Please request a new OTP."},
+		})
 	}
 
-	// Check user count
-	var userCount int
-	db.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&userCount)
+	// Check max attempts
+	if attempts >= 5 {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error": fiber.Map{"code": "MAX_ATTEMPTS", "message": "Too many failed attempts. Please request a new OTP."},
+		})
+	}
 
-	// Try to get a sample user (just email and id)
-	var sampleEmail, sampleID string
-	db.QueryRow(ctx, "SELECT id, email FROM users LIMIT 1").Scan(&sampleID, &sampleEmail)
+	// Increment attempts
+	_, _ = db.Exec(ctx, `UPDATE email_verifications SET attempts = attempts + 1 WHERE id = $1`, verID)
+
+	// Compare OTP hash with bcrypt
+	if err := bcrypt.CompareHashAndPassword([]byte(otpHash), []byte(req.OTP)); err != nil {
+		remaining := 4 - attempts // attempts was before increment
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":               "INVALID_OTP",
+				"message":            "Invalid verification code",
+				"remaining_attempts": remaining,
+			},
+		})
+	}
+
+	// OTP is valid - mark email as verified
+	_, _ = db.Exec(ctx, `UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1`, userID)
+
+	// Delete all verifications for this user
+	_, _ = db.Exec(ctx, `DELETE FROM email_verifications WHERE user_id = $1`, userID)
+
+	logSecurityEvent(ctx, userID, "email_verified", true, c.IP(), c.Get("User-Agent"), nil)
+
+	// Send welcome email (best-effort)
+	go func() {
+		emailClient := email.GetClient()
+		if emailClient.IsConfigured() {
+			var fullName string
+			database.GetDB().QueryRow(context.Background(),
+				`SELECT COALESCE(full_name, '') FROM users WHERE id = $1`, userID,
+			).Scan(&fullName)
+			subject, html := email.WelcomeEmail(fullName)
+			if err := emailClient.Send(req.Email, subject, html); err != nil {
+				log.Printf("Failed to send welcome email to %s: %v", req.Email, err)
+			}
+		}
+	}()
 
 	return c.JSON(fiber.Map{
-		"columns":      columns,
-		"user_count":   userCount,
-		"sample_user":  fiber.Map{"id": sampleID, "email": sampleEmail},
+		"message":        "Email verified successfully",
+		"email_verified": true,
 	})
 }
+
+// ResendOTPFiber sends a new OTP verification code
+// POST /api/v1/auth/resend-otp
+func ResendOTPFiber(c *fiber.Ctx) error {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "Invalid request body"},
+		})
+	}
+
+	if req.Email == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "VALIDATION_ERROR", "message": "Email is required"},
+		})
+	}
+
+	// Always return success to prevent email enumeration
+	successResponse := fiber.Map{
+		"message": "If an account with that email exists and is unverified, a new verification code has been sent.",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+	emailAddr := strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Look up user
+	var userID, fullName string
+	var emailVerified bool
+	err := db.QueryRow(ctx,
+		`SELECT id, COALESCE(full_name, ''), email_verified FROM users WHERE email = $1 AND is_active = true`,
+		emailAddr,
+	).Scan(&userID, &fullName, &emailVerified)
+	if err != nil || emailVerified {
+		// User not found or already verified - return success anyway
+		return c.JSON(successResponse)
+	}
+
+	// Rate limit: max 3 OTPs per email per hour
+	var recentCount int
+	db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM email_verifications WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
+		userID,
+	).Scan(&recentCount)
+	if recentCount >= 3 {
+		return c.JSON(successResponse) // Don't reveal rate limit
+	}
+
+	// Generate new OTP
+	otp, err := generateOTP()
+	if err != nil {
+		log.Printf("Failed to generate OTP: %v", err)
+		return c.JSON(successResponse)
+	}
+
+	otpHash, err := bcrypt.GenerateFromPassword([]byte(otp), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Failed to hash OTP: %v", err)
+		return c.JSON(successResponse)
+	}
+
+	// Delete old verifications for this user
+	_, _ = db.Exec(ctx, `DELETE FROM email_verifications WHERE user_id = $1`, userID)
+
+	// Insert new verification (10-min expiry)
+	verID := "ver_" + uuid.New().String()[:8]
+	_, err = db.Exec(ctx,
+		`INSERT INTO email_verifications (id, user_id, email, otp_hash, attempts, expires_at, created_at)
+		 VALUES ($1, $2, $3, $4, 0, $5, NOW())`,
+		verID, userID, emailAddr, string(otpHash), time.Now().Add(10*time.Minute),
+	)
+	if err != nil {
+		log.Printf("Failed to create verification record: %v", err)
+		return c.JSON(successResponse)
+	}
+
+	// Send OTP email (best-effort)
+	go func() {
+		emailClient := email.GetClient()
+		if emailClient.IsConfigured() {
+			subject, html := email.VerificationOTPEmail(fullName, otp)
+			if err := emailClient.Send(emailAddr, subject, html); err != nil {
+				log.Printf("Failed to send OTP email to %s: %v", emailAddr, err)
+			}
+		} else {
+			log.Printf("Email client not configured, skipping OTP email for %s", emailAddr)
+		}
+	}()
+
+	return c.JSON(successResponse)
+}
+

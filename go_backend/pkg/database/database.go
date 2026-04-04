@@ -348,6 +348,18 @@ func runMigrations(pool *pgxpool.Pool) error {
 			created_at TIMESTAMPTZ DEFAULT NOW(),
 			UNIQUE(promo_code_id, user_id)
 		)`,
+
+		// Email verifications table for OTP-based email verification
+		`CREATE TABLE IF NOT EXISTS email_verifications (
+			id VARCHAR(36) PRIMARY KEY,
+			user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			email VARCHAR(255) NOT NULL,
+			otp_hash VARCHAR(255) NOT NULL,
+			attempts INT DEFAULT 0,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)`,
 	}
 
 	for i, migration := range migrations {

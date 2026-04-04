@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/email"
 )
 
 // GetSystemOverviewFiber returns system-wide statistics for admin dashboard
@@ -632,6 +633,26 @@ func CreateInviteFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to create invite"},
 		})
 	}
+
+	// Send invite email (best-effort)
+	go func() {
+		emailClient := email.GetClient()
+		if emailClient.IsConfigured() {
+			// Get inviter's name
+			var inviterName string
+			database.GetDB().QueryRow(context.Background(),
+				`SELECT COALESCE(full_name, email) FROM users WHERE id = $1`, currentUserID,
+			).Scan(&inviterName)
+
+			inviteLink := fmt.Sprintf("https://synthos.dev/register?invite=%s", token)
+			subject, html := email.InviteEmail(inviterName, req.Role, inviteLink)
+			if err := emailClient.Send(req.Email, subject, html); err != nil {
+				log.Printf("Failed to send invite email to %s: %v", req.Email, err)
+			}
+		} else {
+			log.Printf("Email client not configured, skipping invite email for %s", req.Email)
+		}
+	}()
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"id":         inviteID,

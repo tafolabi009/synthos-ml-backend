@@ -123,6 +123,7 @@ type RegisterRequest struct {
 	Username    string `json:"username" validate:"omitempty,min=3,max=50,alphanum"`
 	FullName    string `json:"full_name" validate:"required,min=1,max=100"`
 	CompanyName string `json:"company_name" validate:"required,min=1,max=200"`
+	InviteToken string `json:"invite_token" validate:"omitempty"`
 }
 
 // UpdateProfileRequest is the request body for updating user profile

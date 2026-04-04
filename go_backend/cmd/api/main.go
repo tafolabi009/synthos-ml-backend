@@ -23,6 +23,7 @@ import (
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	configpkg "github.com/tafolabi009/backend/go_backend/pkg/config"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/email"
 	"github.com/tafolabi009/backend/go_backend/pkg/grpcclient"
 	"github.com/tafolabi009/backend/go_backend/pkg/monitoring"
 	"github.com/tafolabi009/backend/go_backend/pkg/storage"
@@ -50,6 +51,9 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer database.Close()
+
+	// Initialize email client
+	email.Init()
 
 	// Initialize gRPC clients for ML services
 	grpcCfg := grpcclient.DefaultProductionConfig()
@@ -236,6 +240,8 @@ func main() {
 			authRoutes.Post("/refresh", handlers.RefreshTokenFiber)
 			authRoutes.Post("/forgot-password", handlers.ForgotPasswordFiber)
 			authRoutes.Post("/reset-password", handlers.ResetPasswordFiber)
+			authRoutes.Post("/verify-email", handlers.VerifyEmailFiber)
+			authRoutes.Post("/resend-otp", handlers.ResendOTPFiber)
 		}
 
 		// Promo code validation (public - for signup flow)
