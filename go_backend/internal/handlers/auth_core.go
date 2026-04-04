@@ -279,6 +279,30 @@ func LoginFiber(c *fiber.Ctx) error {
 	if !user.EmailVerified {
 		// Verify password first so we don't leak verification status to wrong credentials
 		if auth.CheckPasswordHash(req.Password, user.PasswordHash) {
+			// Auto-resend OTP so the user can verify from the redirect page
+			go func() {
+				otpCtx, otpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer otpCancel()
+				db := database.GetDB()
+				var recentCount int
+				db.QueryRow(otpCtx, `SELECT COUNT(*) FROM email_verifications WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`, user.ID).Scan(&recentCount)
+				if recentCount < 3 {
+					db.Exec(otpCtx, `DELETE FROM email_verifications WHERE user_id = $1`, user.ID)
+					otp, _ := generateOTP()
+					otpHash, _ := bcrypt.GenerateFromPassword([]byte(otp), bcrypt.DefaultCost)
+					verID := "ver_" + uuid.New().String()[:8]
+					db.Exec(otpCtx, `INSERT INTO email_verifications (id, user_id, email, otp_hash, expires_at) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')`, verID, user.ID, user.Email, string(otpHash))
+					emailClient := email.GetClient()
+					if emailClient.IsConfigured() {
+						userName := ""
+						if user.FullName != nil { userName = *user.FullName }
+						subject, body := email.VerificationOTPEmail(userName, otp)
+						if err := emailClient.Send(user.Email, subject, body); err != nil {
+							log.Printf("Failed to resend OTP to %s: %v", user.Email, err)
+						}
+					}
+				}
+			}()
 			return c.Status(fiber.StatusOK).JSON(fiber.Map{
 				"requires_verification": true,
 				"email":                 user.Email,
