@@ -73,14 +73,22 @@ func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Generate presigned URL for upload (valid for 24 hours for large files)
+	// Generate upload URL (resumable for GCS, presigned for S3)
 	var uploadURL string
+	var uploadMethod string
 	var err error
-	expiryMinutes := 1440 // 24 hours
 	if h.GCSClient != nil {
-		uploadURL, _, err = h.GCSClient.GeneratePresignedUploadURL(ctx, objectKey, req.FileType, expiryMinutes)
+		// Use resumable upload for reliable large file transfers
+		uploadURL, err = h.GCSClient.InitiateResumableUpload(ctx, objectKey, req.FileType)
+		uploadMethod = "resumable"
+		if err != nil {
+			log.Printf("Resumable upload failed, falling back to signed URL: %v", err)
+			uploadURL, _, err = h.GCSClient.GeneratePresignedUploadURL(ctx, objectKey, req.FileType, 1440)
+			uploadMethod = "direct"
+		}
 	} else if h.S3Client != nil {
 		uploadURL, err = h.S3Client.GeneratePresignedURL(ctx, objectKey, "PUT", 24*time.Hour, req.FileType)
+		uploadMethod = "direct"
 	} else {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -90,7 +98,7 @@ func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 		})
 	}
 	if err != nil {
-		log.Printf("Failed to generate presigned URL: %v", err)
+		log.Printf("Failed to generate upload URL: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{
 				"code":    "URL_GENERATION_ERROR",
@@ -125,9 +133,9 @@ func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 	response := models.InitiateUploadResponse{
 		DatasetID:    datasetID,
 		UploadURL:    uploadURL,
-		UploadMethod: "direct",
-		ChunkSize:    10485760,
-		ExpiresIn:    86400, // 24 hours
+		UploadMethod: uploadMethod,
+		ChunkSize:    8388608, // 8MB chunks for resumable uploads
+		ExpiresIn:    86400,   // 24 hours
 	}
 
 	return c.JSON(response)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -143,30 +144,53 @@ func (p *GCSProvider) GeneratePresignedUploadURL(ctx context.Context, key string
 	return url, headers, nil
 }
 
-// GenerateResumableUploadURL creates a GCS resumable upload session URL
-// This supports uploads of any size with pause/resume capability
-func (p *GCSProvider) GenerateResumableUploadURL(ctx context.Context, key string, contentType string) (string, error) {
-	obj := p.client.Bucket(p.bucket).Object(key)
-	writer := obj.NewWriter(ctx)
-	writer.ContentType = contentType
-	// We don't actually write - we just need the resumable URL
-	// GCS resumable uploads work by POSTing to the XML API
-	// For signed resumable uploads, we use the JSON API approach
-
-	// Generate a signed URL with resumable flag
+// InitiateResumableUpload creates a GCS resumable upload session and returns the session URI.
+// The session URI can be used by the client to upload file chunks using Content-Range headers.
+// This supports uploads of any size with pause/resume capability.
+func (p *GCSProvider) InitiateResumableUpload(ctx context.Context, key string, contentType string) (string, error) {
+	// Step 1: Generate a signed URL that allows initiating a resumable upload
 	opts := &storage.SignedURLOptions{
-		Method:  "PUT",
-		Expires: time.Now().Add(24 * time.Hour), // 24 hour expiry for large uploads
+		Method:  "POST",
+		Expires: time.Now().Add(24 * time.Hour),
 		Scheme:  storage.SigningSchemeV4,
-		Headers: []string{"Content-Type:" + contentType},
+		Headers: []string{
+			"Content-Type:application/json",
+			"x-goog-resumable:start",
+		},
+		ContentType: "application/json",
 	}
 
-	url, err := p.client.Bucket(p.bucket).SignedURL(key, opts)
+	signedURL, err := p.client.Bucket(p.bucket).SignedURL(key, opts)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate resumable upload URL: %w", err)
+		return "", fmt.Errorf("failed to generate signed URL for resumable upload: %w", err)
 	}
 
-	return url, nil
+	// Step 2: POST to the signed URL to initiate the resumable session
+	req, err := http.NewRequestWithContext(ctx, "POST", signedURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create resumable upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Length", "0")
+	req.Header.Set("x-goog-resumable", "start")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to initiate resumable session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("resumable upload initiation failed (status %d): %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	sessionURI := resp.Header.Get("Location")
+	if sessionURI == "" {
+		return "", fmt.Errorf("no session URI returned from GCS")
+	}
+
+	return sessionURI, nil
 }
 
 // GeneratePresignedDownloadURL generates a presigned URL for direct download
