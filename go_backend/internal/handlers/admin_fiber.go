@@ -639,6 +639,27 @@ func CreateInviteFiber(c *fiber.Ctx) error {
 
 	db := database.GetDB()
 
+	// Check if user already exists with this email
+	var existingUserCount int
+	db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE email = $1`, req.Email).Scan(&existingUserCount)
+	if existingUserCount > 0 {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": fiber.Map{"code": "USER_EXISTS", "message": "A user with this email already exists. Use the user management page to change their role instead."},
+		})
+	}
+
+	// Check for existing pending invite to this email (prevent duplicates)
+	var existingInviteCount int
+	db.QueryRow(ctx, `SELECT COUNT(*) FROM invites WHERE email = $1 AND status = 'pending' AND expires_at > NOW() AND created_at > NOW() - INTERVAL '1 minute'`, req.Email).Scan(&existingInviteCount)
+	if existingInviteCount > 0 {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVITE_COOLDOWN", "message": "An invite was already sent to this email in the last minute. Please wait before sending another."},
+		})
+	}
+
+	// Revoke any existing pending invites for this email (keep only the latest)
+	db.Exec(ctx, `UPDATE invites SET status = 'revoked' WHERE email = $1 AND status = 'pending'`, req.Email)
+
 	inviteID := "inv_" + uuid.New().String()[:8]
 	token := uuid.New().String()
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
@@ -735,6 +756,35 @@ func ListInvitesFiber(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"invites": invites})
+}
+
+// DeleteInviteFiber revokes or deletes an invite
+// DELETE /api/v1/admin/invites/:id
+func DeleteInviteFiber(c *fiber.Ctx) error {
+	inviteID := c.Params("id")
+	adminID := c.Locals("user_id").(string)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	result, err := db.Exec(ctx, `DELETE FROM invites WHERE id = $1`, inviteID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to delete invite"},
+		})
+	}
+
+	if result.RowsAffected() == 0 {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": fiber.Map{"code": "NOT_FOUND", "message": "Invite not found"},
+		})
+	}
+
+	logAdminAction(adminID, "admin_invite_delete", inviteID, "Invite deleted")
+
+	return c.JSON(fiber.Map{"message": "Invite deleted successfully"})
 }
 
 // DeleteUserFiber soft or hard deletes a user

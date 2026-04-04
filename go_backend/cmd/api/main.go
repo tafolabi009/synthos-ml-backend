@@ -399,6 +399,7 @@ func main() {
 			adminRoutes.Patch("/promo-codes/:id", handlers.UpdatePromoCodeFiber)
 			adminRoutes.Post("/invites", handlers.CreateInviteFiber)
 			adminRoutes.Get("/invites", handlers.ListInvitesFiber)
+			adminRoutes.Delete("/invites/:id", handlers.DeleteInviteFiber)
 			adminRoutes.Get("/validations", handlers.ListAllValidationsFiber)
 			adminRoutes.Get("/datasets", handlers.ListAllDatasetsFiber)
 			adminRoutes.Delete("/users/:id", handlers.DeleteUserFiber)
