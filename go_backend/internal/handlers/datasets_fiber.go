@@ -73,13 +73,14 @@ func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Generate presigned URL for upload (valid for 1 hour)
+	// Generate presigned URL for upload (valid for 24 hours for large files)
 	var uploadURL string
 	var err error
+	expiryMinutes := 1440 // 24 hours
 	if h.GCSClient != nil {
-		uploadURL, _, err = h.GCSClient.GeneratePresignedUploadURL(ctx, objectKey, req.FileType, 60)
+		uploadURL, _, err = h.GCSClient.GeneratePresignedUploadURL(ctx, objectKey, req.FileType, expiryMinutes)
 	} else if h.S3Client != nil {
-		uploadURL, err = h.S3Client.GeneratePresignedURL(ctx, objectKey, "PUT", time.Hour, req.FileType)
+		uploadURL, err = h.S3Client.GeneratePresignedURL(ctx, objectKey, "PUT", 24*time.Hour, req.FileType)
 	} else {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -124,9 +125,9 @@ func (h *DatasetHandler) InitiateUploadFiber(c *fiber.Ctx) error {
 	response := models.InitiateUploadResponse{
 		DatasetID:    datasetID,
 		UploadURL:    uploadURL,
-		UploadMethod: "multipart",
+		UploadMethod: "direct",
 		ChunkSize:    10485760,
-		ExpiresIn:    3600,
+		ExpiresIn:    86400, // 24 hours
 	}
 
 	return c.JSON(response)
