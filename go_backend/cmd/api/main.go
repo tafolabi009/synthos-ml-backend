@@ -288,6 +288,10 @@ func main() {
 			authProtected.Post("/2fa/disable", handlers.TwoFactorDisableFiber)
 		}
 
+		// Session management
+		authProtected.Get("/sessions", handlers.ListSessionsFiber)
+		authProtected.Delete("/sessions/:id", handlers.RevokeSessionFiber)
+
 		// API Keys (protected)
 		apiKeys := v1.Group("/api-keys", middleware.AuthRequiredFiber())
 		{
@@ -352,6 +356,17 @@ func main() {
 			{
 				analytics.Get("/usage", middleware.RequireScopes("read:analytics"), handlers.GetUsageAnalyticsFiber)
 				analytics.Get("/validation-history", middleware.RequireScopes("read:analytics"), handlers.GetValidationHistoryFiber)
+			}
+
+			// Webhook management (any authenticated user)
+			webhookRoutes := protected.Group("/webhooks")
+			{
+				webhookRoutes.Post("", handlers.CreateWebhookFiber)
+				webhookRoutes.Get("", handlers.ListWebhooksFiber)
+				webhookRoutes.Get("/:id", handlers.GetWebhookFiber)
+				webhookRoutes.Patch("/:id", handlers.UpdateWebhookFiber)
+				webhookRoutes.Delete("/:id", handlers.DeleteWebhookFiber)
+				webhookRoutes.Get("/:id/deliveries", handlers.ListWebhookDeliveriesFiber)
 			}
 
 			// Customer ticket routes (any authenticated user)

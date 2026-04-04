@@ -11,6 +11,7 @@ import (
 	"github.com/tafolabi009/backend/go_backend/internal/models"
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/webhook"
 )
 
 // GetCreditBalanceFiber returns the user's current credit balance and pricing info
@@ -125,6 +126,9 @@ func PurchaseCreditsFiber(c *fiber.Ctx) error {
 			},
 		})
 	}
+
+	// Dispatch webhook event for credits purchased
+	webhook.Dispatch("credits.purchased", userID, fiber.Map{"amount": totalCredits, "balance": transaction.BalanceAfter})
 
 	// Get updated balance
 	balance, err := creditRepo.GetOrCreateBalance(ctx, userID)

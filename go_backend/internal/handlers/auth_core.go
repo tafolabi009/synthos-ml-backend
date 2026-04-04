@@ -1188,6 +1188,116 @@ func ResendOTPFiber(c *fiber.Ctx) error {
 	return c.JSON(successResponse)
 }
 
+// ListSessionsFiber returns all active sessions for the authenticated user
+// GET /api/v1/auth/sessions
+func ListSessionsFiber(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{"code": "UNAUTHORIZED", "message": "Authentication required"},
+		})
+	}
+
+	// Get current session ID from JWT
+	currentSessionID := ""
+	if sid := c.Locals("session_id"); sid != nil {
+		currentSessionID = sid.(string)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+	rows, err := db.Query(ctx,
+		`SELECT id, user_agent, ip_address, created_at, last_used_at
+		 FROM sessions WHERE user_id = $1 AND is_valid = true ORDER BY last_used_at DESC`,
+		userID.(string),
+	)
+	if err != nil {
+		log.Printf("Failed to list sessions: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to retrieve sessions"},
+		})
+	}
+	defer rows.Close()
+
+	sessions := []fiber.Map{}
+	for rows.Next() {
+		var id, userAgent, ipAddress string
+		var createdAt, lastUsedAt time.Time
+		if err := rows.Scan(&id, &userAgent, &ipAddress, &createdAt, &lastUsedAt); err != nil {
+			continue
+		}
+		sessions = append(sessions, fiber.Map{
+			"id":           id,
+			"user_agent":   userAgent,
+			"ip_address":   ipAddress,
+			"created_at":   createdAt.Format(time.RFC3339),
+			"last_used_at": lastUsedAt.Format(time.RFC3339),
+			"is_current":   id == currentSessionID,
+		})
+	}
+
+	return c.JSON(fiber.Map{"sessions": sessions})
+}
+
+// RevokeSessionFiber revokes a specific session
+// DELETE /api/v1/auth/sessions/:id
+func RevokeSessionFiber(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{"code": "UNAUTHORIZED", "message": "Authentication required"},
+		})
+	}
+
+	sessionID := c.Params("id")
+
+	// Prevent revoking current session (must use logout instead)
+	currentSessionID := ""
+	if sid := c.Locals("session_id"); sid != nil {
+		currentSessionID = sid.(string)
+	}
+	if sessionID == currentSessionID {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "CANNOT_REVOKE_CURRENT", "message": "Cannot revoke your current session. Use logout instead."},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	// Verify session belongs to user
+	var ownerID string
+	err := db.QueryRow(ctx, `SELECT user_id FROM sessions WHERE id = $1 AND is_valid = true`, sessionID).Scan(&ownerID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": fiber.Map{"code": "NOT_FOUND", "message": "Session not found"},
+		})
+	}
+	if ownerID != userID.(string) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": fiber.Map{"code": "FORBIDDEN", "message": "You do not have access to this session"},
+		})
+	}
+
+	// Revoke the session
+	_, err = db.Exec(ctx,
+		`UPDATE sessions SET is_valid = false, revoked_at = NOW() WHERE id = $1`, sessionID)
+	if err != nil {
+		log.Printf("Failed to revoke session: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to revoke session"},
+		})
+	}
+
+	logSecurityEvent(ctx, userID.(string), "session_revoked", true, c.IP(), c.Get("User-Agent"), map[string]string{"revoked_session": sessionID})
+
+	return c.JSON(fiber.Map{"message": "Session revoked successfully"})
+}
+
 // GetNotificationPreferencesFiber returns the user's notification preferences
 // GET /api/v1/auth/notification-preferences
 func GetNotificationPreferencesFiber(c *fiber.Ctx) error {

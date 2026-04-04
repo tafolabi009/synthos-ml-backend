@@ -379,6 +379,35 @@ func runMigrations(pool *pgxpool.Pool) error {
 			ticket_updates BOOLEAN DEFAULT true,
 			updated_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
+
+		// Webhooks table
+		`CREATE TABLE IF NOT EXISTS webhooks (
+			id VARCHAR(36) PRIMARY KEY,
+			user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			url VARCHAR(1000) NOT NULL,
+			secret VARCHAR(255) NOT NULL,
+			events TEXT[] DEFAULT '{}',
+			is_active BOOLEAN DEFAULT true,
+			last_triggered_at TIMESTAMPTZ,
+			failure_count INT DEFAULT 0,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks(user_id)`,
+
+		// Webhook deliveries table
+		`CREATE TABLE IF NOT EXISTS webhook_deliveries (
+			id VARCHAR(36) PRIMARY KEY,
+			webhook_id VARCHAR(36) NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+			event_type VARCHAR(100) NOT NULL,
+			payload JSONB NOT NULL,
+			response_status INT,
+			response_body TEXT,
+			success BOOLEAN DEFAULT false,
+			duration_ms INT,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id)`,
 	}
 
 	for i, migration := range migrations {

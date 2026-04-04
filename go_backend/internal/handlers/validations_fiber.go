@@ -13,6 +13,7 @@ import (
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
 	"github.com/tafolabi009/backend/go_backend/pkg/pdfgen"
+	"github.com/tafolabi009/backend/go_backend/pkg/webhook"
 )
 
 // CreateValidationFiber creates a new validation job - Fiber version
@@ -124,6 +125,9 @@ func CreateValidationFiber(c *fiber.Ctx) error {
 			},
 		})
 	}
+
+	// Dispatch webhook event for validation creation
+	webhook.Dispatch("validation.created", userID, fiber.Map{"validation_id": validationID, "dataset_id": req.DatasetID})
 
 	response := models.CreateValidationResponse{
 		ValidationID:        validationID,
