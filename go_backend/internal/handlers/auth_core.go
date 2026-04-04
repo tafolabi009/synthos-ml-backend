@@ -1096,6 +1096,37 @@ func VerifyEmailFiber(c *fiber.Ctx) error {
 
 	logSecurityEvent(ctx, userID, "email_verified", true, c.IP(), c.Get("User-Agent"), nil)
 
+	// Get full user data to generate JWT and return auto-login
+	userRepo := repository.NewUserRepository(db)
+	user, err := userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return c.JSON(fiber.Map{"message": "Email verified successfully", "email_verified": true})
+	}
+
+	// Generate session and JWT for auto-login
+	sessionID := "ses_" + uuid.New().String()[:8]
+	accessToken, err := auth.GenerateTokenWithClaims(
+		userID, user.Email, strVal(user.Username), strVal(user.CompanyID), strVal(user.Role), sessionID, accessTokenTTL,
+	)
+	if err != nil {
+		return c.JSON(fiber.Map{"message": "Email verified successfully", "email_verified": true})
+	}
+	refreshToken, err := auth.GenerateTokenWithClaims(
+		userID, user.Email, strVal(user.Username), strVal(user.CompanyID), strVal(user.Role), sessionID, refreshTokenTTL,
+	)
+	if err != nil {
+		return c.JSON(fiber.Map{"message": "Email verified successfully", "email_verified": true})
+	}
+
+	// Create session record
+	refreshHash := auth.HashToken(refreshToken)
+	_, _ = db.Exec(ctx,
+		`INSERT INTO sessions (id, user_id, refresh_token_hash, user_agent, ip_address, expires_at) VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '30 days')`,
+		sessionID, userID, refreshHash, c.Get("User-Agent"), c.IP())
+
+	// Update last login
+	_, _ = db.Exec(ctx, `UPDATE users SET last_login_at = NOW() WHERE id = $1`, userID)
+
 	// Send welcome email (best-effort)
 	go func() {
 		emailClient := email.GetClient()
@@ -1111,9 +1142,16 @@ func VerifyEmailFiber(c *fiber.Ctx) error {
 		}
 	}()
 
+	// Return JWT so frontend can auto-login
+	profile := user.ToProfile()
 	return c.JSON(fiber.Map{
 		"message":        "Email verified successfully",
 		"email_verified": true,
+		"access_token":   accessToken,
+		"refresh_token":  refreshToken,
+		"token_type":     "Bearer",
+		"expires_in":     900,
+		"user":           profile,
 	})
 }
 
