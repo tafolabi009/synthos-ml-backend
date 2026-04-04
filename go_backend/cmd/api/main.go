@@ -325,6 +325,7 @@ func main() {
 			{
 				validations.Post("/create", middleware.RequireScopes("write:validations"), handlers.CreateValidationFiber)
 				validations.Get("", middleware.RequireScopes("read:validations"), handlers.ListValidationsFiber)
+				validations.Get("/compare", middleware.RequireScopes("read:validations"), handlers.CompareValidationsFiber)
 				validations.Get("/:id", middleware.RequireScopes("read:validations"), handlers.GetValidationFiber)
 				validations.Get("/:id/report", middleware.RequireScopes("read:validations"), handlers.GetValidationReportFiber)
 				validations.Get("/:id/certificate", middleware.RequireScopes("read:validations"), handlers.GetValidationCertificateFiber)
@@ -356,6 +357,8 @@ func main() {
 			{
 				analytics.Get("/usage", middleware.RequireScopes("read:analytics"), handlers.GetUsageAnalyticsFiber)
 				analytics.Get("/validation-history", middleware.RequireScopes("read:analytics"), handlers.GetValidationHistoryFiber)
+				analytics.Get("/benchmarks", middleware.RequireScopes("read:analytics"), handlers.GetBenchmarksFiber)
+				analytics.Get("/quality-trends", middleware.RequireScopes("read:analytics"), handlers.GetQualityTrendsFiber)
 			}
 
 			// Webhook management (any authenticated user)
