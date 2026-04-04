@@ -360,6 +360,25 @@ func runMigrations(pool *pgxpool.Pool) error {
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)`,
+
+		// Platform settings table
+		`CREATE TABLE IF NOT EXISTS platform_settings (
+			key VARCHAR(100) PRIMARY KEY,
+			value JSONB NOT NULL DEFAULT '{}',
+			updated_by VARCHAR(36),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+
+		// Notification preferences table
+		`CREATE TABLE IF NOT EXISTS notification_preferences (
+			user_id VARCHAR(36) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			email_notifications BOOLEAN DEFAULT true,
+			validation_complete BOOLEAN DEFAULT true,
+			warranty_expiring BOOLEAN DEFAULT true,
+			weekly_digest BOOLEAN DEFAULT false,
+			ticket_updates BOOLEAN DEFAULT true,
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
 	}
 
 	for i, migration := range migrations {
@@ -368,6 +387,15 @@ func runMigrations(pool *pgxpool.Pool) error {
 			return fmt.Errorf("migration %d failed: %w", i+1, err)
 		}
 	}
+
+	// Seed default platform settings
+	_, _ = pool.Exec(ctx, `INSERT INTO platform_settings (key, value) VALUES
+		('registration_enabled', 'true'),
+		('maintenance_mode', 'false'),
+		('max_upload_size_gb', '500'),
+		('default_signup_credits', '0'),
+		('allowed_email_domains', '""')
+	ON CONFLICT (key) DO NOTHING`)
 
 	log.Println("✅ Database migrations completed")
 	return nil

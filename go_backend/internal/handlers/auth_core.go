@@ -19,6 +19,7 @@ import (
 	"github.com/tafolabi009/backend/go_backend/internal/repository"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
 	"github.com/tafolabi009/backend/go_backend/pkg/email"
+	"github.com/tafolabi009/backend/go_backend/pkg/sanitize"
 )
 
 const (
@@ -74,6 +75,10 @@ func RegisterFiber(c *fiber.Ctx) error {
 			},
 		})
 	}
+
+	// Sanitize user inputs
+	req.FullName = sanitize.String(req.FullName)
+	req.CompanyName = sanitize.String(req.CompanyName)
 
 	// Validate password strength
 	if err := auth.PasswordMeetsRequirements(req.Password); err != nil {
@@ -638,6 +643,11 @@ func UpdateProfileFiber(c *fiber.Ctx) error {
 		})
 	}
 
+	// Sanitize user inputs
+	req.FullName = sanitize.String(req.FullName)
+	req.CompanyName = sanitize.String(req.CompanyName)
+	req.JobTitle = sanitize.String(req.JobTitle)
+
 	// Update fields if provided
 	if req.FullName != "" {
 		user.FullName = &req.FullName
@@ -1176,5 +1186,123 @@ func ResendOTPFiber(c *fiber.Ctx) error {
 	}()
 
 	return c.JSON(successResponse)
+}
+
+// GetNotificationPreferencesFiber returns the user's notification preferences
+// GET /api/v1/auth/notification-preferences
+func GetNotificationPreferencesFiber(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{"code": "UNAUTHORIZED", "message": "Authentication required"},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	var emailNotif, validationComplete, warrantyExpiring, weeklyDigest, ticketUpdates bool
+	err := db.QueryRow(ctx,
+		`SELECT email_notifications, validation_complete, warranty_expiring, weekly_digest, ticket_updates
+		 FROM notification_preferences WHERE user_id = $1`, userID.(string),
+	).Scan(&emailNotif, &validationComplete, &warrantyExpiring, &weeklyDigest, &ticketUpdates)
+	if err != nil {
+		// Return defaults if no row exists
+		return c.JSON(fiber.Map{
+			"email_notifications": true,
+			"validation_complete": true,
+			"warranty_expiring":   true,
+			"weekly_digest":       false,
+			"ticket_updates":      true,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"email_notifications": emailNotif,
+		"validation_complete": validationComplete,
+		"warranty_expiring":   warrantyExpiring,
+		"weekly_digest":       weeklyDigest,
+		"ticket_updates":      ticketUpdates,
+	})
+}
+
+// UpdateNotificationPreferencesFiber updates the user's notification preferences
+// PUT /api/v1/auth/notification-preferences
+func UpdateNotificationPreferencesFiber(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": fiber.Map{"code": "UNAUTHORIZED", "message": "Authentication required"},
+		})
+	}
+
+	var req struct {
+		EmailNotifications *bool `json:"email_notifications"`
+		ValidationComplete *bool `json:"validation_complete"`
+		WarrantyExpiring   *bool `json:"warranty_expiring"`
+		WeeklyDigest       *bool `json:"weekly_digest"`
+		TicketUpdates      *bool `json:"ticket_updates"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "Invalid request body"},
+		})
+	}
+
+	// Use defaults for nil values
+	emailNotif := true
+	if req.EmailNotifications != nil {
+		emailNotif = *req.EmailNotifications
+	}
+	validationComplete := true
+	if req.ValidationComplete != nil {
+		validationComplete = *req.ValidationComplete
+	}
+	warrantyExpiring := true
+	if req.WarrantyExpiring != nil {
+		warrantyExpiring = *req.WarrantyExpiring
+	}
+	weeklyDigest := false
+	if req.WeeklyDigest != nil {
+		weeklyDigest = *req.WeeklyDigest
+	}
+	ticketUpdates := true
+	if req.TicketUpdates != nil {
+		ticketUpdates = *req.TicketUpdates
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	_, err := db.Exec(ctx,
+		`INSERT INTO notification_preferences (user_id, email_notifications, validation_complete, warranty_expiring, weekly_digest, ticket_updates, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		 ON CONFLICT (user_id) DO UPDATE SET
+		   email_notifications = EXCLUDED.email_notifications,
+		   validation_complete = EXCLUDED.validation_complete,
+		   warranty_expiring = EXCLUDED.warranty_expiring,
+		   weekly_digest = EXCLUDED.weekly_digest,
+		   ticket_updates = EXCLUDED.ticket_updates,
+		   updated_at = NOW()`,
+		userID.(string), emailNotif, validationComplete, warrantyExpiring, weeklyDigest, ticketUpdates,
+	)
+	if err != nil {
+		log.Printf("Failed to update notification preferences: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to update notification preferences"},
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"email_notifications": emailNotif,
+		"validation_complete": validationComplete,
+		"warranty_expiring":   warrantyExpiring,
+		"weekly_digest":       weeklyDigest,
+		"ticket_updates":      ticketUpdates,
+	})
 }
 

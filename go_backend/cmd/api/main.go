@@ -278,6 +278,10 @@ func main() {
 			authProtected.Patch("/me", handlers.UpdateProfileFiber)
 			authProtected.Post("/change-password", handlers.ChangePasswordFiber)
 
+			// Notification preferences
+			authProtected.Get("/notification-preferences", handlers.GetNotificationPreferencesFiber)
+			authProtected.Put("/notification-preferences", handlers.UpdateNotificationPreferencesFiber)
+
 			// 2FA routes
 			authProtected.Post("/2fa/setup", handlers.TwoFactorSetupFiber)
 			authProtected.Post("/2fa/verify", handlers.TwoFactorVerifyFiber)
@@ -375,6 +379,10 @@ func main() {
 			adminRoutes.Get("/invites", handlers.ListInvitesFiber)
 			adminRoutes.Get("/validations", handlers.ListAllValidationsFiber)
 			adminRoutes.Get("/datasets", handlers.ListAllDatasetsFiber)
+			adminRoutes.Delete("/users/:id", handlers.DeleteUserFiber)
+			adminRoutes.Get("/audit-log", handlers.GetAuditLogFiber)
+			adminRoutes.Get("/settings", handlers.GetPlatformSettingsFiber)
+			adminRoutes.Patch("/settings", handlers.UpdatePlatformSettingsFiber)
 		}
 
 		// Support routes (support role required - admin/developer also pass via hierarchy)

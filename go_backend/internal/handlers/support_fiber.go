@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/sanitize"
 )
 
 // GetSupportOverviewFiber returns support dashboard overview
@@ -270,6 +271,9 @@ func ReplyToTicketFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "message is required"},
 		})
 	}
+
+	// Sanitize user input
+	req.Message = sanitize.String(req.Message)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

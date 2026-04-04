@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
+	"github.com/tafolabi009/backend/go_backend/pkg/sanitize"
 )
 
 // CreateTicketFiber creates a new support ticket with an initial message
@@ -25,6 +26,10 @@ func CreateTicketFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "subject and message are required"},
 		})
 	}
+
+	// Sanitize user inputs
+	req.Subject = sanitize.String(req.Subject)
+	req.Message = sanitize.String(req.Message)
 
 	if req.Category == "" {
 		req.Category = "general"
@@ -242,6 +247,9 @@ func ReplyToMyTicketFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "message is required"},
 		})
 	}
+
+	// Sanitize user input
+	req.Message = sanitize.String(req.Message)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

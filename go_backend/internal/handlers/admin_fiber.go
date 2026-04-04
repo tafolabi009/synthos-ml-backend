@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -12,6 +13,15 @@ import (
 	"github.com/tafolabi009/backend/go_backend/pkg/database"
 	"github.com/tafolabi009/backend/go_backend/pkg/email"
 )
+
+// logAdminAction logs an admin action to the security_events table
+func logAdminAction(adminID, action, targetID, details string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	db := database.GetDB()
+	db.Exec(ctx, `INSERT INTO security_events (user_id, event_type, success, details, created_at) VALUES ($1, $2, true, $3, NOW())`,
+		adminID, action, fmt.Sprintf(`{"target": "%s", "details": "%s"}`, targetID, details))
+}
 
 // GetSystemOverviewFiber returns system-wide statistics for admin dashboard
 func GetSystemOverviewFiber(c *fiber.Ctx) error {
@@ -281,6 +291,8 @@ func UpdateUserRoleFiber(c *fiber.Ctx) error {
 		})
 	}
 
+	logAdminAction(currentUserID, "admin_role_change", targetUserID, fmt.Sprintf("role changed to %s", req.Role))
+
 	return c.JSON(fiber.Map{"success": true, "user_id": targetUserID, "role": req.Role})
 }
 
@@ -314,6 +326,9 @@ func UpdateUserStatusFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "NOT_FOUND", "message": "User not found"},
 		})
 	}
+
+	adminID := c.Locals("user_id").(string)
+	logAdminAction(adminID, "admin_status_change", targetUserID, fmt.Sprintf("is_active set to %v", req.IsActive))
 
 	return c.JSON(fiber.Map{"success": true, "user_id": targetUserID, "is_active": req.IsActive})
 }
@@ -349,6 +364,9 @@ func CreatePromoCodeFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "CONFLICT", "message": "Promo code already exists or database error"},
 		})
 	}
+
+	adminID := c.Locals("user_id").(string)
+	logAdminAction(adminID, "admin_promo_create", promoID, fmt.Sprintf("code=%s credits=%d", req.Code, req.CreditsGrant))
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"id":            promoID,
@@ -436,6 +454,9 @@ func UpdatePromoCodeFiber(c *fiber.Ctx) error {
 			"error": fiber.Map{"code": "NOT_FOUND", "message": "Promo code not found"},
 		})
 	}
+
+	adminID := c.Locals("user_id").(string)
+	logAdminAction(adminID, "admin_promo_update", promoID, fmt.Sprintf("is_active set to %v", req.IsActive))
 
 	return c.JSON(fiber.Map{"success": true, "id": promoID, "is_active": req.IsActive})
 }
@@ -654,6 +675,8 @@ func CreateInviteFiber(c *fiber.Ctx) error {
 		}
 	}()
 
+	logAdminAction(currentUserID, "admin_invite_create", inviteID, fmt.Sprintf("email=%s role=%s", req.Email, req.Role))
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"id":         inviteID,
 		"email":      req.Email,
@@ -712,4 +735,278 @@ func ListInvitesFiber(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"invites": invites})
+}
+
+// DeleteUserFiber soft or hard deletes a user
+// DELETE /api/v1/admin/users/:id?hard=true
+func DeleteUserFiber(c *fiber.Ctx) error {
+	targetUserID := c.Params("id")
+	adminID := c.Locals("user_id").(string)
+	hardDelete := c.Query("hard", "false") == "true"
+
+	// Prevent self-deletion
+	if targetUserID == adminID {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "SELF_DELETE", "message": "You cannot delete your own account"},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	// Verify user exists
+	var exists bool
+	err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, targetUserID).Scan(&exists)
+	if err != nil || !exists {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": fiber.Map{"code": "NOT_FOUND", "message": "User not found"},
+		})
+	}
+
+	deleteType := "soft"
+
+	if hardDelete {
+		deleteType = "hard"
+		// CASCADE delete user and all related data
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to begin transaction"},
+			})
+		}
+		defer tx.Rollback(ctx)
+
+		// Delete related data in order (some may not have CASCADE)
+		_, _ = tx.Exec(ctx, `DELETE FROM ticket_messages WHERE sender_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM support_tickets WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM warranty_claims WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM warranties WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM validations WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM datasets WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM api_keys WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM notifications WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM notification_preferences WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM email_verifications WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM credit_balances WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM credit_transactions WHERE user_id = $1`, targetUserID)
+		_, _ = tx.Exec(ctx, `DELETE FROM promo_redemptions WHERE user_id = $1`, targetUserID)
+		_, err = tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, targetUserID)
+		if err != nil {
+			log.Printf("Failed to hard delete user %s: %v", targetUserID, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to delete user"},
+			})
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to commit deletion"},
+			})
+		}
+	} else {
+		// Soft delete: anonymize PII
+		anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.synthos.dev", targetUserID)
+		_, err := db.Exec(ctx,
+			`UPDATE users SET email = $1, full_name = 'Deleted User', company_name = '', is_active = false, updated_at = NOW() WHERE id = $2`,
+			anonymizedEmail, targetUserID,
+		)
+		if err != nil {
+			log.Printf("Failed to soft delete user %s: %v", targetUserID, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to delete user"},
+			})
+		}
+	}
+
+	logAdminAction(adminID, "admin_user_delete", targetUserID, fmt.Sprintf("type=%s", deleteType))
+
+	return c.JSON(fiber.Map{
+		"message": "User deleted successfully",
+		"type":    deleteType,
+	})
+}
+
+// GetAuditLogFiber returns paginated admin audit log
+// GET /api/v1/admin/audit-log?page=1&page_size=50
+func GetAuditLogFiber(c *fiber.Ctx) error {
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(c.Query("page_size", "50"))
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
+	offset := (page - 1) * pageSize
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	adminEventTypes := `('admin_role_change', 'admin_status_change', 'admin_promo_create', 'admin_promo_update', 'admin_invite_create', 'admin_user_delete', 'admin_settings_update')`
+
+	var totalCount int64
+	_ = db.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM security_events WHERE event_type IN %s`, adminEventTypes)).Scan(&totalCount)
+
+	rows, err := db.Query(ctx, fmt.Sprintf(
+		`SELECT se.id, COALESCE(se.user_id, ''), se.event_type, se.success, se.details, COALESCE(se.ip_address, ''), se.created_at,
+		        COALESCE(u.full_name, COALESCE(u.email, ''))
+		 FROM security_events se
+		 LEFT JOIN users u ON se.user_id = u.id
+		 WHERE se.event_type IN %s
+		 ORDER BY se.created_at DESC
+		 LIMIT $1 OFFSET $2`, adminEventTypes), pageSize, offset)
+	if err != nil {
+		log.Printf("Failed to query audit log: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to query audit log"},
+		})
+	}
+	defer rows.Close()
+
+	type AuditEntry struct {
+		ID        int             `json:"id"`
+		UserID    string          `json:"user_id"`
+		EventType string          `json:"event_type"`
+		Success   bool            `json:"success"`
+		Details   json.RawMessage `json:"details"`
+		IPAddress string          `json:"ip_address"`
+		CreatedAt time.Time       `json:"created_at"`
+		AdminName string          `json:"admin_name"`
+	}
+
+	var entries []AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		var detailsStr *string
+		if err := rows.Scan(&e.ID, &e.UserID, &e.EventType, &e.Success, &detailsStr, &e.IPAddress, &e.CreatedAt, &e.AdminName); err != nil {
+			log.Printf("Failed to scan audit entry: %v", err)
+			continue
+		}
+		if detailsStr != nil && *detailsStr != "" {
+			e.Details = json.RawMessage(*detailsStr)
+		} else {
+			e.Details = json.RawMessage(`{}`)
+		}
+		entries = append(entries, e)
+	}
+	if entries == nil {
+		entries = []AuditEntry{}
+	}
+
+	totalPages := int((totalCount + int64(pageSize) - 1) / int64(pageSize))
+
+	return c.JSON(fiber.Map{
+		"audit_log": entries,
+		"pagination": fiber.Map{
+			"page":        page,
+			"page_size":   pageSize,
+			"total_count": totalCount,
+			"total_pages": totalPages,
+		},
+	})
+}
+
+// GetPlatformSettingsFiber returns all platform settings
+// GET /api/v1/admin/settings
+func GetPlatformSettingsFiber(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	rows, err := db.Query(ctx, `SELECT key, value FROM platform_settings`)
+	if err != nil {
+		log.Printf("Failed to query platform settings: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fiber.Map{"code": "DATABASE_ERROR", "message": "Failed to query settings"},
+		})
+	}
+	defer rows.Close()
+
+	settings := make(map[string]interface{})
+	for rows.Next() {
+		var key string
+		var valueRaw []byte
+		if err := rows.Scan(&key, &valueRaw); err != nil {
+			log.Printf("Failed to scan setting: %v", err)
+			continue
+		}
+		var parsed interface{}
+		if err := json.Unmarshal(valueRaw, &parsed); err == nil {
+			settings[key] = parsed
+		} else {
+			settings[key] = string(valueRaw)
+		}
+	}
+
+	return c.JSON(settings)
+}
+
+// UpdatePlatformSettingsFiber updates platform settings
+// PATCH /api/v1/admin/settings
+func UpdatePlatformSettingsFiber(c *fiber.Ctx) error {
+	adminID := c.Locals("user_id").(string)
+
+	var reqBody map[string]interface{}
+	if err := c.BodyParser(&reqBody); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fiber.Map{"code": "INVALID_REQUEST", "message": "Invalid request body"},
+		})
+	}
+
+	knownKeys := map[string]bool{
+		"registration_enabled": true,
+		"maintenance_mode":     true,
+		"max_upload_size_gb":   true,
+		"default_signup_credits": true,
+		"allowed_email_domains":  true,
+	}
+
+	// Validate keys
+	for key := range reqBody {
+		if !knownKeys[key] {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": fiber.Map{"code": "INVALID_KEY", "message": fmt.Sprintf("Unknown setting key: %s", key)},
+			})
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db := database.GetDB()
+
+	for key, value := range reqBody {
+		valueJSON, err := json.Marshal(value)
+		if err != nil {
+			log.Printf("Failed to marshal setting value for %s: %v", key, err)
+			continue
+		}
+		_, err = db.Exec(ctx,
+			`UPDATE platform_settings SET value = $1, updated_by = $2, updated_at = NOW() WHERE key = $3`,
+			valueJSON, adminID, key,
+		)
+		if err != nil {
+			log.Printf("Failed to update setting %s: %v", key, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fiber.Map{"code": "DATABASE_ERROR", "message": fmt.Sprintf("Failed to update setting: %s", key)},
+			})
+		}
+	}
+
+	logAdminAction(adminID, "admin_settings_update", "", fmt.Sprintf("updated keys: %v", func() []string {
+		keys := make([]string, 0, len(reqBody))
+		for k := range reqBody {
+			keys = append(keys, k)
+		}
+		return keys
+	}()))
+
+	// Return updated settings
+	return GetPlatformSettingsFiber(c)
 }
