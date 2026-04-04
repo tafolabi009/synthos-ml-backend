@@ -49,9 +49,9 @@ func (r *UserRepository) Create(ctx context.Context, user *models.User) error {
 // GetByEmail retrieves a user by email
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	query := `
-		SELECT id, email, username, password_hash, full_name, company_id, company_name, 
+		SELECT id, email, username, password_hash, full_name, company_id, company_name,
 		       job_title, phone, role, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
-		       failed_login_attempts, locked_until, is_active, last_login_at, created_at, updated_at
+		       failed_login_attempts, locked_until, is_active, email_verified, last_login_at, created_at, updated_at
 		FROM users
 		WHERE email = $1
 	`
@@ -74,6 +74,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 		&user.FailedLoginAttempts,
 		&user.LockedUntil,
 		&user.IsActive,
+		&user.EmailVerified,
 		&user.LastLoginAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
@@ -91,7 +92,7 @@ func (r *UserRepository) GetByID(ctx context.Context, userID string) (*models.Us
 	query := `
 		SELECT id, email, username, password_hash, full_name, company_id, company_name,
 		       job_title, phone, role, two_factor_enabled, two_factor_secret, two_factor_backup_codes,
-		       failed_login_attempts, locked_until, is_active, last_login_at, created_at, updated_at
+		       failed_login_attempts, locked_until, is_active, email_verified, last_login_at, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
@@ -114,6 +115,7 @@ func (r *UserRepository) GetByID(ctx context.Context, userID string) (*models.Us
 		&user.FailedLoginAttempts,
 		&user.LockedUntil,
 		&user.IsActive,
+		&user.EmailVerified,
 		&user.LastLoginAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,

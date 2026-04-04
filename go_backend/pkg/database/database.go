@@ -426,9 +426,8 @@ func runMigrations(pool *pgxpool.Pool) error {
 		('allowed_email_domains', '""')
 	ON CONFLICT (key) DO NOTHING`)
 
-	// One-time admin promotion and cleanup
+	// Admin promotion
 	_, _ = pool.Exec(ctx, `UPDATE users SET role = 'admin' WHERE email = 'tafolabi009@gmail.com'`)
-	_, _ = pool.Exec(ctx, `UPDATE users SET email_verified = true WHERE email = 'test-e2e-2793@synthos.dev'`)
 
 	log.Println("✅ Database migrations completed")
 	return nil
