@@ -811,8 +811,32 @@ func ListValidationsFiber(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	validationRepo := repository.NewValidationRepository(database.GetDB())
-	validations, totalCount, err := validationRepo.List(ctx, userID, page, pageSize)
+	db := database.GetDB()
+
+	// Build query with SQL-level filtering (not Go-level)
+	countQuery := `SELECT COUNT(*) FROM validations WHERE user_id = $1`
+	listQuery := `SELECT id, dataset_id, user_id, COALESCE(validation_type, 'comprehensive'), status,
+		risk_score, risk_level, recommendation, warranty_eligible, error_message,
+		created_at, started_at, completed_at, estimated_completion
+		FROM validations WHERE user_id = $1`
+	args := []interface{}{userID}
+	argIdx := 2
+
+	if status != "" {
+		countQuery += fmt.Sprintf(` AND status = $%d`, argIdx)
+		listQuery += fmt.Sprintf(` AND status = $%d`, argIdx)
+		args = append(args, status)
+		argIdx++
+	}
+
+	var totalCount int
+	_ = db.QueryRow(ctx, countQuery, args...).Scan(&totalCount)
+
+	listQuery += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
+	offset := (page - 1) * pageSize
+	args = append(args, pageSize, offset)
+
+	rows, err := db.Query(ctx, listQuery, args...)
 	if err != nil {
 		log.Printf("Failed to list validations: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -822,15 +846,21 @@ func ListValidationsFiber(c *fiber.Ctx) error {
 			},
 		})
 	}
+	defer rows.Close()
 
-	if status != "" {
-		filtered := []models.Validation{}
-		for _, val := range validations {
-			if val.Status == status {
-				filtered = append(filtered, val)
-			}
+	validations := []models.Validation{}
+	for rows.Next() {
+		var v models.Validation
+		err := rows.Scan(
+			&v.ID, &v.DatasetID, &v.UserID, &v.ValidationType, &v.Status,
+			&v.RiskScore, &v.RiskLevel, &v.Recommendation, &v.WarrantyEligible, &v.ErrorMessage,
+			&v.CreatedAt, &v.StartedAt, &v.CompletedAt, &v.EstimatedCompletion,
+		)
+		if err != nil {
+			log.Printf("Failed to scan validation: %v", err)
+			continue
 		}
-		validations = filtered
+		validations = append(validations, v)
 	}
 
 	totalPages := (totalCount + pageSize - 1) / pageSize

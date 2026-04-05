@@ -556,7 +556,7 @@ func ListAllDatasetsFiber(c *fiber.Ctx) error {
 	_ = db.QueryRow(ctx, `SELECT COUNT(*) FROM datasets`).Scan(&totalCount)
 
 	rows, err := db.Query(ctx,
-		`SELECT d.id, d.user_id, d.name, d.status, COALESCE(d.file_type, ''), d.file_size, d.created_at, d.updated_at,
+		`SELECT d.id, d.user_id, d.filename, d.status, COALESCE(d.file_type, ''), d.file_size, d.created_at, d.updated_at,
 		        COALESCE(u.email, ''), COALESCE(u.full_name, '')
 		 FROM datasets d
 		 LEFT JOIN users u ON d.user_id = u.id
@@ -573,7 +573,7 @@ func ListAllDatasetsFiber(c *fiber.Ctx) error {
 	type AdminDataset struct {
 		ID           string    `json:"id"`
 		UserID       string    `json:"user_id"`
-		Name         string    `json:"name"`
+		Filename     string    `json:"filename"`
 		Status       string    `json:"status"`
 		FileType     string    `json:"file_type"`
 		FileSize     int64     `json:"file_size"`
@@ -586,7 +586,7 @@ func ListAllDatasetsFiber(c *fiber.Ctx) error {
 	var datasets []AdminDataset
 	for rows.Next() {
 		var d AdminDataset
-		if err := rows.Scan(&d.ID, &d.UserID, &d.Name, &d.Status, &d.FileType, &d.FileSize,
+		if err := rows.Scan(&d.ID, &d.UserID, &d.Filename, &d.Status, &d.FileType, &d.FileSize,
 			&d.CreatedAt, &d.UpdatedAt, &d.UserEmail, &d.UserFullName); err != nil {
 			log.Printf("Failed to scan dataset: %v", err)
 			continue

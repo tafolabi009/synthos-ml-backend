@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tafolabi009/backend/go_backend/internal/models"
 )
@@ -75,7 +75,7 @@ func (r *CreditRepository) AddCredits(ctx context.Context, userID string, amount
 	}
 
 	// Record transaction
-	txID := fmt.Sprintf("ctx_%d", time.Now().UnixNano())
+	txID := "ctx_" + uuid.New().String()[:12]
 	transaction := &models.CreditTransaction{}
 	err = tx.QueryRow(ctx,
 		`INSERT INTO credit_transactions (id, user_id, type, amount, balance_after, description, reference_type, reference_id)
@@ -120,7 +120,7 @@ func (r *CreditRepository) DeductCredits(ctx context.Context, userID string, amo
 	}
 
 	// Record transaction
-	txID := fmt.Sprintf("ctx_%d", time.Now().UnixNano())
+	txID := "ctx_" + uuid.New().String()[:12]
 	transaction := &models.CreditTransaction{}
 	err = tx.QueryRow(ctx,
 		`INSERT INTO credit_transactions (id, user_id, type, amount, balance_after, description, reference_type, reference_id)

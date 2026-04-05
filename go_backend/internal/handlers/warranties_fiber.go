@@ -19,7 +19,8 @@ func RequestWarrantyFiber(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
 	var req struct {
-		WarrantyType   string  `json:"warranty_type" validate:"required"`
+		WarrantyType   string  `json:"warranty_type"`
+		CoverageType   string  `json:"coverage_type"`
 		CoverageAmount float64 `json:"coverage_amount"`
 	}
 
@@ -30,6 +31,11 @@ func RequestWarrantyFiber(c *fiber.Ctx) error {
 				"message": err.Error(),
 			},
 		})
+	}
+
+	// Accept both warranty_type and coverage_type field names
+	if req.WarrantyType == "" {
+		req.WarrantyType = req.CoverageType
 	}
 
 	ctx := context.Background()

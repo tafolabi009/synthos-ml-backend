@@ -409,6 +409,60 @@ func runMigrations(pool *pgxpool.Pool) error {
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id)`,
+
+		// Credit balances
+		`CREATE TABLE IF NOT EXISTS credit_balances (
+			id VARCHAR(36) PRIMARY KEY,
+			user_id VARCHAR(255) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+			balance BIGINT NOT NULL DEFAULT 0,
+			lifetime_purchased BIGINT NOT NULL DEFAULT 0,
+			lifetime_used BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_credit_balances_user ON credit_balances(user_id)`,
+
+		// Credit transactions
+		`CREATE TABLE IF NOT EXISTS credit_transactions (
+			id VARCHAR(36) PRIMARY KEY,
+			user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			amount BIGINT NOT NULL,
+			type VARCHAR(50) NOT NULL,
+			description TEXT DEFAULT '',
+			reference_type VARCHAR(50),
+			reference_id VARCHAR(255),
+			balance_after BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id)`,
+
+		// Credit packages
+		`CREATE TABLE IF NOT EXISTS credit_packages (
+			id VARCHAR(36) PRIMARY KEY,
+			name VARCHAR(100) NOT NULL,
+			description TEXT DEFAULT '',
+			credits BIGINT NOT NULL DEFAULT 0,
+			bonus_credits BIGINT NOT NULL DEFAULT 0,
+			price_cents BIGINT NOT NULL DEFAULT 0,
+			currency VARCHAR(10) DEFAULT 'USD',
+			is_active BOOLEAN DEFAULT true,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+
+		// Credit costs
+		`CREATE TABLE IF NOT EXISTS credit_costs (
+			id VARCHAR(36) PRIMARY KEY,
+			operation VARCHAR(100) NOT NULL UNIQUE,
+			credits_required BIGINT NOT NULL DEFAULT 0,
+			description TEXT DEFAULT '',
+			is_active BOOLEAN DEFAULT true,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+
+		// Add location column to security_events
+		`ALTER TABLE security_events ADD COLUMN IF NOT EXISTS location VARCHAR(100) DEFAULT ''`,
 	}
 
 	for i, migration := range migrations {
@@ -440,8 +494,24 @@ func runMigrations(pool *pgxpool.Pool) error {
 
 	// Admin promotion
 	_, _ = pool.Exec(ctx, `UPDATE users SET role = 'admin' WHERE email = 'tafolabi009@gmail.com'`)
-	// Fix stuck datasets - mark all "processing" or "uploading" as "ready"
-	_, _ = pool.Exec(ctx, `UPDATE datasets SET status = 'ready' WHERE status IN ('processing', 'uploading')`)
+	// Seed credit packages
+	_, _ = pool.Exec(ctx, `INSERT INTO credit_packages (id, name, description, credits, bonus_credits, price_cents, currency) VALUES
+		('pkg_starter', 'Starter', '2 small-scale validations included', 50, 0, 150000, 'USD'),
+		('pkg_professional', 'Professional', 'For growing teams with regular validation needs', 500, 100, 500000, 'USD'),
+		('pkg_business', 'Business', 'High-volume enterprise validation workloads', 2500, 500, 2000000, 'USD'),
+		('pkg_enterprise', 'Enterprise', 'Unlimited-scale validation with dedicated support and SLA', 15000, 5000, 8000000, 'USD')
+	ON CONFLICT (id) DO NOTHING`)
+
+	// Seed credit costs
+	_, _ = pool.Exec(ctx, `INSERT INTO credit_costs (id, operation, credits_required, description) VALUES
+		('cost_val_std', 'validation_standard', 25, 'Standard priority validation job'),
+		('cost_val_exp', 'validation_express', 50, 'Express priority validation job (2x)'),
+		('cost_warranty', 'warranty_request', 15, 'Performance warranty request'),
+		('cost_revalidation', 'revalidation', 20, 'Re-validation of previously validated dataset')
+	ON CONFLICT (id) DO NOTHING`)
+
+	// Fix stuck datasets - only fix datasets older than 1 hour
+	_, _ = pool.Exec(ctx, `UPDATE datasets SET status = 'ready' WHERE status IN ('processing', 'uploading') AND updated_at < NOW() - INTERVAL '1 hour'`)
 
 	log.Println("✅ Database migrations completed")
 	return nil

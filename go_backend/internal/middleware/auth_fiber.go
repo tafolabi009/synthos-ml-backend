@@ -80,6 +80,15 @@ func AuthRequiredFiber() fiber.Handler {
 			}
 		}
 
+		// Check if user is still active
+		var isActive bool
+		err = database.GetDB().QueryRow(ctx, `SELECT is_active FROM users WHERE id = $1`, claims.UserID).Scan(&isActive)
+		if err != nil || !isActive {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": fiber.Map{"code": "ACCOUNT_SUSPENDED", "message": "Your account has been suspended"},
+			})
+		}
+
 		// Store user info in context for downstream handlers
 		c.Locals("user_id", claims.UserID)
 		c.Locals("email", claims.Email)

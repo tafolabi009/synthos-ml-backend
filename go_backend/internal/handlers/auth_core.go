@@ -699,11 +699,8 @@ func UpdateProfileFiber(c *fiber.Ctx) error {
 		})
 	}
 
-	// Return updated profile
-	return c.JSON(fiber.Map{
-		"message": "Profile updated successfully",
-		"user":    user.ToProfile(),
-	})
+	// Return updated profile directly (consistent with GetMeFiber)
+	return c.JSON(user.ToProfile())
 }
 
 // ChangePasswordFiber handles password change for authenticated users
