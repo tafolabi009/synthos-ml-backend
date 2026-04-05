@@ -427,6 +427,17 @@ func runMigrations(pool *pgxpool.Pool) error {
 		('allowed_email_domains', '""')
 	ON CONFLICT (key) DO NOTHING`)
 
+	// Password reset tokens table
+	_, _ = pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS password_reset_tokens (
+		id VARCHAR(36) PRIMARY KEY,
+		user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		token_hash VARCHAR(255) NOT NULL,
+		expires_at TIMESTAMPTZ NOT NULL,
+		used_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	)`)
+	_, _ = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)`)
+
 	// Admin promotion
 	_, _ = pool.Exec(ctx, `UPDATE users SET role = 'admin' WHERE email = 'tafolabi009@gmail.com'`)
 	// Fix stuck datasets - mark all "processing" or "uploading" as "ready"
